@@ -10,6 +10,7 @@ from openai import OpenAI
 from datetime import datetime
 import humanize
 from dotenv import load_dotenv
+import logging
 
 # Securely load environment variables
 load_dotenv()
@@ -19,6 +20,49 @@ client = OpenAI(
     organization=os.environ.get("OPENAI_API_ORG_ID"),
 )
 
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+def gather_cpu_stats():
+    return {
+        'CPU Usage (per CPU)': psutil.cpu_percent(interval=1, percpu=True),
+        'CPU Times': psutil.cpu_times()._asdict(),
+        'CPU Frequency': psutil.cpu_freq()._asdict(),
+        'CPU Threads': psutil.cpu_count(logical=True),
+        'CPU Load Average': psutil.getloadavg(),
+    }
+
+def gather_memory_stats():
+    return {
+        'Memory Usage': psutil.virtual_memory().percent,
+        'Memory Details': psutil.virtual_memory()._asdict(),
+        'Swap Memory Usage': psutil.swap_memory().percent,
+        'Swap Memory Details': psutil.swap_memory()._asdict(),
+    }
+
+def gather_disk_stats():
+    return {
+        'Disk Usage': psutil.disk_usage('/').percent,
+        'Disk Details': psutil.disk_usage('/')._asdict(),
+        'Disk IO': psutil.disk_io_counters()._asdict(),
+        'Disk Partitions': [partition._asdict() for partition in psutil.disk_partitions()],
+    }
+
+def gather_network_stats():
+    return {
+        'Network Stats': {iface: stats._asdict() for iface, stats in psutil.net_io_counters(pernic=True).items()},
+        'Network Interfaces': {iface: addrs for iface, addrs in psutil.net_if_addrs().items()},
+    }
+
+def gather_other_stats():
+    return {
+        'Processes': len(psutil.pids()),
+        'Process Details': [proc.info for proc in psutil.process_iter(['pid', 'name', 'username', 'status'])],
+        'Top Processes': gather_top_process_stats(),
+        'Battery': psutil.sensors_battery()._asdict() if psutil.sensors_battery() else 'No battery information available',
+        'Boot Time': psutil.boot_time(),
+        'Users': [user._asdict() for user in psutil.users()],
+    }
+
 def gather_system_stats(progress):
     tasks = {
         'CPU Stats': progress.add_task("Gathering CPU stats...", total=5),
@@ -27,58 +71,33 @@ def gather_system_stats(progress):
         'Network Stats': progress.add_task("Gathering Network stats...", total=2),
         'Other Stats': progress.add_task("Gathering Other stats...", total=4)
     }
-    
+
     try:
         progress.update(tasks['CPU Stats'], advance=1)
-        cpu_stats = {
-            'CPU Usage (per CPU)': psutil.cpu_percent(interval=1, percpu=True),
-            'CPU Times': psutil.cpu_times()._asdict(),
-            'CPU Frequency': psutil.cpu_freq()._asdict(),
-            'CPU Threads': psutil.cpu_count(logical=True),
-            'CPU Load Average': psutil.getloadavg(),
-        }
+        cpu_stats = gather_cpu_stats()
         progress.update(tasks['CPU Stats'], advance=4)
-        
+
         progress.update(tasks['Memory Stats'], advance=1)
-        memory_stats = {
-            'Memory Usage': psutil.virtual_memory().percent,
-            'Memory Details': psutil.virtual_memory()._asdict(),
-            'Swap Memory Usage': psutil.swap_memory().percent,
-            'Swap Memory Details': psutil.swap_memory()._asdict(),
-        }
+        memory_stats = gather_memory_stats()
         progress.update(tasks['Memory Stats'], advance=2)
-        
+
         progress.update(tasks['Disk Stats'], advance=1)
-        disk_stats = {
-            'Disk Usage': psutil.disk_usage('/').percent,
-            'Disk Details': psutil.disk_usage('/')._asdict(),
-            'Disk IO': psutil.disk_io_counters()._asdict(),
-            'Disk Partitions': [partition._asdict() for partition in psutil.disk_partitions()],
-        }
+        disk_stats = gather_disk_stats()
         progress.update(tasks['Disk Stats'], advance=3)
-        
+
         progress.update(tasks['Network Stats'], advance=1)
-        network_stats = {
-            'Network Stats': {iface: stats._asdict() for iface, stats in psutil.net_io_counters(pernic=True).items()},
-            'Network Interfaces': {iface: addrs for iface, addrs in psutil.net_if_addrs().items()},
-        }
+        network_stats = gather_network_stats()
         progress.update(tasks['Network Stats'], advance=1)
-        
+
         progress.update(tasks['Other Stats'], advance=1)
-        other_stats = {
-            'Processes': len(psutil.pids()),
-            'Process Details': [proc.info for proc in psutil.process_iter(['pid', 'name', 'username', 'status'])],
-            'Top Processes': gather_top_process_stats(),
-            'Battery': psutil.sensors_battery()._asdict() if psutil.sensors_battery() else 'No battery information available',
-            'Boot Time': psutil.boot_time(),
-            'Users': [user._asdict() for user in psutil.users()],
-        }
+        other_stats = gather_other_stats()
         progress.update(tasks['Other Stats'], advance=3)
-        
+
         system_stats = {**cpu_stats, **memory_stats, **disk_stats, **network_stats, **other_stats}
     except Exception as e:
+        logging.error(f"Error gathering system stats: {e}")
         system_stats = {"error": f"Error gathering system stats: {e}"}
-    
+
     return system_stats
 
 def gather_top_process_stats():
@@ -208,6 +227,15 @@ def create_stats_table(system_stats):
                 formatted_value = humanize.naturalsize(value, binary=True)
                 details.append(f"{key}: {formatted_value}")
         return "\n".join(details)
+    
+    def format_disk_details(disk_details):
+        formatted_details = [
+            f"Total: {humanize.naturalsize(disk_details['total'], binary=True)}",
+            f"Used: {humanize.naturalsize(disk_details['used'], binary=True)}",
+            f"Free: {humanize.naturalsize(disk_details['free'], binary=True)}",
+            f"Percent: {disk_details['percent']}%"
+        ]
+        return "\n".join(formatted_details)
 
     for category, stats in system_stats.items():
         if isinstance(stats, (list, tuple)):
@@ -227,7 +255,7 @@ def create_stats_table(system_stats):
             elif category == "Swap Memory Details":
                 stats = format_swap_memory_details(stats)
             elif category == "Disk Details":
-                stats = ', '.join(f"{k}: {format_bytes(v) if 'bytes' in k else v}" for k, v in stats.items())
+                stats = format_disk_details(stats)
             elif category == "Disk IO":
                 stats = ', '.join(f"{k}: {format_bytes(v) if 'bytes' in k else v}" for k, v in stats.items())
             elif category == "Network Stats":

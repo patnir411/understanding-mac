@@ -41,3 +41,6 @@ macvenv/
 # Ignore sensitive or personal files
 secrets/
 passwords.txt
+
+# Ignore pycache
+__pycache__/

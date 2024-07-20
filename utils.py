@@ -3,8 +3,22 @@ from datetime import datetime
 
 
 # Utility functions for formatting
-def format_bytes(bytes):
-    return humanize.naturalsize(bytes, binary=True)
+def format_value(value):
+    if isinstance(value, float):
+        return f"{value:.2f}"
+    elif isinstance(value, int):
+        return format_bytes(value) if value > 1024 else str(value)
+    elif isinstance(value, list) and len(value) > 5:
+        return ", ".join(map(str, value[:5])) + f" ... ({len(value)} items)"
+    else:
+        return str(value)
+
+def format_bytes(bytes_value):
+    for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+        if bytes_value < 1024:
+            return f"{bytes_value:.2f} {unit}"
+        bytes_value /= 1024
+    return f"{bytes_value:.2f} PB"
 
 def format_time(timestamp):
     return datetime.fromtimestamp(timestamp).strftime('%Y-%m-%d %H:%M:%S')

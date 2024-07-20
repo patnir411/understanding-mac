@@ -1,16 +1,22 @@
 from rich.console import Console, Group
-from rich.table import Table
 from rich.panel import Panel
 from rich.progress import Progress
 from rich.text import Text
 from rich.box import ROUNDED
+from rich.live import Live
+from rich.markdown import Markdown
+from rich.spinner import Spinner
+from rich.table import Table
 import psutil
 import os
 import time
+from collections import OrderedDict
 from openai import OpenAI
-from utils import format_bytes, format_time, highlight_critical_values, format_disk_partitions, format_memory_details, format_swap_memory_details, format_disk_details, format_network_connections
+from utils import format_value, format_bytes, format_time, highlight_critical_values, format_disk_partitions, format_memory_details, format_swap_memory_details, format_disk_details, format_network_connections
 from dotenv import load_dotenv
+from rich import box
 import logging
+import sys
 
 # Securely load environment variables
 load_dotenv()
@@ -24,49 +30,210 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 
 def gather_cpu_stats():
-    return {
-        'CPU Usage (per CPU)': psutil.cpu_percent(interval=1, percpu=True),
-        'CPU Times': psutil.cpu_times()._asdict(),
-        'CPU Frequency': psutil.cpu_freq()._asdict(),
-        'CPU Threads': psutil.cpu_count(logical=True),
-        'CPU Load Average': psutil.getloadavg(),
+    cpu_stats = OrderedDict()
+
+    # Overall CPU Usage
+    cpu_stats['CPU Usage'] = {
+        'Overall': psutil.cpu_percent(interval=1),
+        'Per CPU': psutil.cpu_percent(interval=1, percpu=True)
     }
 
+    # CPU Times
+    cpu_times = psutil.cpu_times()
+    cpu_stats['CPU Times'] = {
+        'User': cpu_times.user,
+        'System': cpu_times.system,
+        'Idle': cpu_times.idle,
+    }
+
+    # CPU Frequency
+    cpu_freq = psutil.cpu_freq()
+    cpu_stats['CPU Frequency'] = {
+        'Current': cpu_freq.current,
+        'Min': cpu_freq.min,
+        'Max': cpu_freq.max
+    }
+
+    # CPU Counts
+    cpu_stats['CPU Counts'] = {
+        'Physical': psutil.cpu_count(logical=False),
+        'Logical': psutil.cpu_count(logical=True)
+    }
+
+    # CPU Load
+    load1, load5, load15 = psutil.getloadavg()
+    cpu_stats['CPU Load Average'] = {
+        '1 min': load1,
+        '5 min': load5,
+        '15 min': load15
+    }
+
+    # Context Switches and Interrupts
+    if hasattr(psutil, 'cpu_stats'):
+        cpu_stats_info = psutil.cpu_stats()
+        cpu_stats['CPU Stats'] = {
+            'Context Switches': cpu_stats_info.ctx_switches,
+            'Interrupts': cpu_stats_info.interrupts,
+            'Soft Interrupts': cpu_stats_info.soft_interrupts,
+            'Syscalls': cpu_stats_info.syscalls
+        }
+
+    return cpu_stats
 
 def gather_memory_stats():
-    return {
-        'Memory Usage': psutil.virtual_memory().percent,
-        'Memory Details': psutil.virtual_memory()._asdict(),
-        'Swap Memory Usage': psutil.swap_memory().percent,
-        'Swap Memory Details': psutil.swap_memory()._asdict(),
+    memory_stats = OrderedDict()
+
+    # Virtual Memory
+    virtual_memory = psutil.virtual_memory()
+    memory_stats['Virtual Memory'] = {
+        'Total': virtual_memory.total,
+        'Available': virtual_memory.available,
+        'Used': virtual_memory.used,
+        'Free': virtual_memory.free,
+        'Percent': virtual_memory.percent,
+        'Active': getattr(virtual_memory, 'active', 'N/A'),
+        'Inactive': getattr(virtual_memory, 'inactive', 'N/A'),
+        'Buffers': getattr(virtual_memory, 'buffers', 'N/A'),
+        'Cached': getattr(virtual_memory, 'cached', 'N/A')
     }
+
+    # Swap Memory
+    swap_memory = psutil.swap_memory()
+    memory_stats['Swap Memory'] = {
+        'Total': swap_memory.total,
+        'Used': swap_memory.used,
+        'Free': swap_memory.free,
+        'Percent': swap_memory.percent,
+        'Sin': getattr(swap_memory, 'sin', 'N/A'),
+        'Sout': getattr(swap_memory, 'sout', 'N/A')
+    }
+
+    return memory_stats
 
 
 def gather_disk_stats():
-    return {
-        'Disk Usage': psutil.disk_usage('/').percent,
-        'Disk Details': psutil.disk_usage('/')._asdict(),
-        'Disk IO': psutil.disk_io_counters()._asdict(),
-        'Disk Partitions': [partition._asdict() for partition in psutil.disk_partitions()],
+    disk_stats = OrderedDict()
+
+    # Disk Usage
+    disk_usage = psutil.disk_usage('/')
+    disk_stats['Disk Usage'] = {
+        'Total': disk_usage.total,
+        'Used': disk_usage.used,
+        'Free': disk_usage.free,
+        'Percent': disk_usage.percent
     }
+
+    # Disk IO
+    disk_io = psutil.disk_io_counters()
+    disk_stats['Disk IO'] = {
+        'Read Count': disk_io.read_count,
+        'Write Count': disk_io.write_count,
+        'Read Bytes': disk_io.read_bytes,
+        'Write Bytes': disk_io.write_bytes,
+        'Read Time': disk_io.read_time,
+        'Write Time': disk_io.write_time
+    }
+
+    # Disk Partitions
+    disk_stats['Disk Partitions'] = []
+    for partition in psutil.disk_partitions():
+        disk_stats['Disk Partitions'].append({
+            'Device': partition.device,
+            'Mountpoint': partition.mountpoint,
+            'FSType': partition.fstype,
+            'Opts': partition.opts
+        })
+
+    return disk_stats
 
 
 def gather_network_stats():
-    return {
-        'Network Stats': {iface: stats._asdict() for iface, stats in psutil.net_io_counters(pernic=True).items()},
-        'Network Interfaces': {iface: addrs for iface, addrs in psutil.net_if_addrs().items()},
-        'Network Connections': [conn._asdict() for conn in psutil.net_connections(kind='inet')]
-    }
+    network_stats = OrderedDict()
+
+    # Network IO Counters
+    network_stats['Network IO'] = {}
+    for iface, stats in psutil.net_io_counters(pernic=True).items():
+        network_stats['Network IO'][iface] = {
+            'Bytes Sent': stats.bytes_sent,
+            'Bytes Received': stats.bytes_recv,
+            'Packets Sent': stats.packets_sent,
+            'Packets Received': stats.packets_recv,
+            'Errors In': stats.errin,
+            'Errors Out': stats.errout,
+            'Drop In': stats.dropin,
+            'Drop Out': stats.dropout
+        }
+
+    # Network Interfaces
+    network_stats['Network Interfaces'] = {}
+    for iface, addrs in psutil.net_if_addrs().items():
+        network_stats['Network Interfaces'][iface] = []
+        for addr in addrs:
+            network_stats['Network Interfaces'][iface].append({
+                'Family': str(addr.family),
+                'Address': addr.address,
+                'Netmask': addr.netmask,
+                'Broadcast': getattr(addr, 'broadcast', 'N/A')
+            })
+
+    # Network Connections
+    network_stats['Network Connections'] = []
+    for conn in psutil.net_connections(kind='inet'):
+        network_stats['Network Connections'].append({
+            'FD': conn.fd,
+            'Family': str(conn.family),
+            'Type': str(conn.type),
+            'Local Address': f"{conn.laddr.ip}:{conn.laddr.port}",
+            'Remote Address': f"{conn.raddr.ip}:{conn.raddr.port}" if conn.raddr else 'N/A',
+            'Status': conn.status,
+            'PID': conn.pid
+        })
+
+    return network_stats
 
 
 def gather_other_stats():
-    return {
-        'Processes': len(psutil.pids()),
-        'Process Details': [proc.info for proc in psutil.process_iter(['pid', 'name', 'username', 'status'])],
-        'Battery': psutil.sensors_battery()._asdict() if psutil.sensors_battery() else 'No battery information available',
-        'Boot Time': psutil.boot_time(),
-        'Users': [user._asdict() for user in psutil.users()],
+    other_stats = OrderedDict()
+
+    # Processes
+    other_stats['Processes'] = {
+        'Total': len(psutil.pids()),
+        'Details': []
     }
+    for proc in psutil.process_iter(['pid', 'name', 'username', 'status']):
+        other_stats['Processes']['Details'].append({
+            'PID': proc.info['pid'],
+            'Name': proc.info['name'],
+            'Username': proc.info['username'],
+            'Status': proc.info['status']
+        })
+
+    # Battery
+    battery = psutil.sensors_battery()
+    if battery:
+        other_stats['Battery'] = {
+            'Percent': battery.percent,
+            'Seconds Left': battery.secsleft,
+            'Power Plugged': battery.power_plugged
+        }
+    else:
+        other_stats['Battery'] = 'No battery information available'
+
+    # Boot Time
+    other_stats['Boot Time'] = psutil.boot_time()
+
+    # Users
+    other_stats['Users'] = []
+    for user in psutil.users():
+        other_stats['Users'].append({
+            'Name': user.name,
+            'Terminal': user.terminal,
+            'Host': user.host,
+            'Started': user.started,
+            'PID': user.pid
+        })
+
+    return other_stats
 
 
 def gather_system_stats(progress):
@@ -74,66 +241,55 @@ def gather_system_stats(progress):
         'CPU Stats': progress.add_task("Gathering CPU stats...", total=5),
         'Memory Stats': progress.add_task("Gathering Memory stats...", total=3),
         'Disk Stats': progress.add_task("Gathering Disk stats...", total=4),
-        'Network Stats': progress.add_task("Gathering Network stats...", total=2),
+        'Network Stats': progress.add_task("Gathering Network stats...", total=3),
         'Other Stats': progress.add_task("Gathering Other stats...", total=4)
     }
 
+    system_stats = OrderedDict()
+
     try:
+        # CPU Stats
         progress.update(tasks['CPU Stats'], advance=1)
-        cpu_stats = gather_cpu_stats()
+        system_stats['CPU Stats'] = gather_cpu_stats()
         progress.update(tasks['CPU Stats'], advance=4)
 
+        # Memory Stats
         progress.update(tasks['Memory Stats'], advance=1)
-        memory_stats = gather_memory_stats()
+        system_stats['Memory Stats'] = gather_memory_stats()
         progress.update(tasks['Memory Stats'], advance=2)
 
+        # Disk Stats
         progress.update(tasks['Disk Stats'], advance=1)
-        disk_stats = gather_disk_stats()
+        system_stats['Disk Stats'] = gather_disk_stats()
         progress.update(tasks['Disk Stats'], advance=3)
 
+        # Network Stats
         progress.update(tasks['Network Stats'], advance=1)
-        network_stats = gather_network_stats()
-        progress.update(tasks['Network Stats'], advance=1)
+        system_stats['Network Stats'] = gather_network_stats()
+        progress.update(tasks['Network Stats'], advance=2)
 
+        # Other Stats
         progress.update(tasks['Other Stats'], advance=1)
-        other_stats = gather_other_stats()
+        system_stats['Other Stats'] = gather_other_stats()
         progress.update(tasks['Other Stats'], advance=3)
 
-        system_stats = {**cpu_stats, **memory_stats, **disk_stats, **network_stats, **other_stats}
     except Exception as e:
         logging.error(f"Error gathering system stats: {e}")
-        system_stats = {"error": f"Error gathering system stats: {e}"}
+        system_stats = OrderedDict({"error": f"Error gathering system stats: {e}"})
 
     return system_stats
 
 
 def query_gpt(system_stats, user_query="Tell me about my computer."):
-    with Progress() as progress:
-        gpt_task = progress.add_task("[cyan]Querying GPT...", total=5)
-
-        # Step 1: Prepare the query (simulated progress)
-        progress.update(gpt_task, advance=1)
-        time.sleep(2)  # Simulate preparation time
-
-        # Step 2: Sending the request (simulated progress)
-        progress.update(gpt_task, advance=1)
-        time.sleep(2)  # Simulate sending time
-
-        # Step 3: Waiting for response (simulated progress)
-        progress.update(gpt_task, advance=1)
-        time.sleep(2)  # Simulate waiting time
-
-        # Step 4: Receiving the response (simulated progress)
-        progress.update(gpt_task, advance=1)
-        time.sleep(5)  # Simulate receiving time
-
-        # Step 5: Processing the response (actual query)
-        response = client.chat.completions.create(
+    spinner = Spinner("dots", text="Querying GPT...")
+    response = ""
+    with Live(spinner, refresh_per_second=20, transient=True, vertical_overflow="visible") as live:
+        for chunk in client.chat.completions.create(
             model="gpt-4o",
             messages=[
                 {
                     "role": "system",
-                    "content": "You are an expert systems monitor. Given the following system statistics, provide a detailed overview of every metric. Evaluate the system's performance and provide possible reasons for any anomalies."
+                    "content": "You are an expert systems monitor. Provide useful overall insights about the system and answer any questions the user has. Be brief and concise, only elaborate when asked."
                 },
                 {
                     "role": "user",
@@ -145,55 +301,50 @@ def query_gpt(system_stats, user_query="Tell me about my computer."):
                 }
             ],
             max_tokens=4096,
-        )
-        progress.update(gpt_task, advance=1)  # Final update
+            stream=True,
+        ):
+            content = chunk.choices[0].delta.content
+            if content is None:
+                break
+            response += content
+            spinner.update(text=Markdown(response))
+        spinner.update(text="")
+    return response.strip()
 
-    return response.choices[0].message.content.strip()
 
-
-def create_stats_panels(system_stats):
+def create_stats_table(system_stats):
     panels = []
+    table = Table(box=box.HORIZONTALS, show_header=False, show_lines=True, border_style="magenta")
+    table.add_column("Category", style="bold cyan", width=20)
+    table.add_column("Details", style="green")
 
     for category, stats in system_stats.items():
-        if isinstance(stats, (list, tuple)):
-            if category == "Process Details" or category == "Top Processes":
-                summary = [f"{proc['name']} (PID: {proc['pid']})" for proc in stats[:10]]
-                stats = ', '.join(summary) + (", ..." if len(stats) > 10 else "")
-            elif category == "Disk Partitions":
-                stats = format_disk_partitions(stats)
-            elif category == "Network Connections":
-                stats = format_network_connections(stats)
-            else:
-                stats = ', '.join(map(str, stats))
-        elif isinstance(stats, dict):
-            if category == "CPU Times":
-                stats = ', '.join(f"{k}: {v:.2f}" for k, v in stats.items())
-            elif category == "Memory Details":
-                stats = format_memory_details(stats)
-            elif category == "Swap Memory Details":
-                stats = format_swap_memory_details(stats)
-            elif category == "Disk Details":
-                stats = format_disk_details(stats)
-            elif category == "Disk IO":
-                stats = ', '.join(f"{k}: {format_bytes(v) if 'bytes' in k else v}" for k, v in stats.items())
-            elif category == "Network Stats":
-                formatted_stats = []
-                for iface, details in stats.items():
-                    formatted_stats.append(f"{iface}: bytes_sent: {format_bytes(details['bytes_sent'])}, bytes_recv: {format_bytes(details['bytes_recv'])}")
-                stats = '\n'.join(formatted_stats)
-            elif category == "Battery":
-                stats = ', '.join(f"{k}: {v}" for k, v in stats.items())
-            else:
-                stats = ', '.join(f"{k}: {v}" for k, v in stats.items())
-        elif category == "Boot Time":
-            stats = format_time(stats)
-        else:
-            stats = highlight_critical_values(category, stats)
-        
-        panels.append(Panel(Text(str(stats)), title=category, border_style="bold magenta"))
+        category_table = Table(box=box.ROUNDED, show_lines=True, show_header=False)
+        category_table.add_column("Metric", style="cyan")
+        category_table.add_column("Value")
 
-    return Group(*panels)
+        for metric, details in stats.items():
+            if isinstance(details, dict):
+                nested_table = Table(box=box.SIMPLE, show_header=False)
+                nested_table.add_column("Sub-Metric", style="dim cyan")
+                nested_table.add_column("Value")
+                for sub_metric, value in details.items():
+                    nested_table.add_row(sub_metric, format_value(value))
+                category_table.add_row(metric, nested_table)
+            elif isinstance(details, list) and metric in ["Disk Partitions", "Network Connections", "Users"]:
+                nested_table = Table(box=box.SIMPLE, show_header=True)
+                if details:
+                    headers = details[0].keys()
+                    for header in headers:
+                        nested_table.add_column(header.capitalize(), style="dim cyan")
+                    for item in details:
+                        nested_table.add_row(*[format_value(item[header]) for header in headers])
+                category_table.add_row(metric, nested_table)
+            else:
+                category_table.add_row(metric, format_value(details))
+        table.add_row(category, category_table)
 
+    return table
 
 if __name__ == "__main__":
     console = Console()
@@ -201,12 +352,12 @@ if __name__ == "__main__":
     with Progress() as progress:
         system_stats = gather_system_stats(progress)
 
-    system_stats_panels = create_stats_panels(system_stats)
-    console.print(system_stats_panels)
+    stats_display_table = create_stats_table(system_stats)
+    console.print(stats_display_table)
 
     while True:
         user_query = input("Ask me a question about your system (exit to quit): ")
         if user_query.lower() == "exit":
             break
         response = query_gpt(system_stats, user_query)
-        console.print("[bold cyan]GPT Response:[/bold cyan]", response)
+        console.print(Markdown(response))

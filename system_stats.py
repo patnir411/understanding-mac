@@ -1,4 +1,4 @@
-from rich.console import Console, Group
+from rich.console import Console
 from rich.panel import Panel
 from rich.progress import Progress
 from rich.text import Text
@@ -7,24 +7,51 @@ from rich.live import Live
 from rich.markdown import Markdown
 from rich.spinner import Spinner
 from rich.table import Table
-import psutil
+
+import argparse
+import json
+import logging
 import os
+import sys
 import time
 from collections import OrderedDict
-from openai import OpenAI
-from utils import format_value, format_bytes, format_time, highlight_critical_values, format_disk_partitions, format_memory_details, format_swap_memory_details, format_disk_details, format_network_connections
+
+import psutil
 from dotenv import load_dotenv
+from openai import OpenAI
 from rich import box
-import logging
-import sys
+from utils import (
+    format_value,
+    format_bytes,
+    format_time,
+    highlight_critical_values,
+    format_disk_partitions,
+    format_memory_details,
+    format_swap_memory_details,
+    format_disk_details,
+    format_network_connections,
+)
+
+try:
+    import GPUtil
+except Exception:
+    GPUtil = None
+
+try:
+    from cpuinfo import get_cpu_info
+except Exception:
+    get_cpu_info = None
+
 
 # Securely load environment variables
 load_dotenv()
 
-client = OpenAI(
-    api_key=os.environ.get("OPENAI_API_KEY"),
-    organization=os.environ.get("OPENAI_API_ORG_ID"),
-)
+def get_openai_client():
+    api_key = os.environ.get("OPENAI_API_KEY")
+    org = os.environ.get("OPENAI_API_ORG_ID")
+    if not api_key:
+        return None
+    return OpenAI(api_key=api_key, organization=org)
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -79,6 +106,16 @@ def gather_cpu_stats():
         }
 
     return cpu_stats
+
+
+def gather_cpu_info_details():
+    if get_cpu_info is None:
+        return {}
+    try:
+        info = get_cpu_info()
+        return {k: info.get(k) for k in ['brand_raw', 'arch', 'bits', 'count']}
+    except Exception as e:
+        return {'error': str(e)}
 
 def gather_memory_stats():
     memory_stats = OrderedDict()
@@ -192,6 +229,59 @@ def gather_network_stats():
     return network_stats
 
 
+def gather_gpu_stats():
+    gpu_stats = []
+    if GPUtil is None:
+        return gpu_stats
+    try:
+        for gpu in GPUtil.getGPUs():
+            gpu_stats.append(
+                {
+                    "id": gpu.id,
+                    "name": gpu.name,
+                    "load": gpu.load * 100,
+                    "memory_total": gpu.memoryTotal,
+                    "memory_used": gpu.memoryUsed,
+                    "memory_free": gpu.memoryFree,
+                    "temperature": gpu.temperature,
+                }
+            )
+    except Exception as e:
+        gpu_stats = [f"Error getting GPU stats: {e}"]
+    return gpu_stats
+
+
+def gather_sensor_stats():
+    sensors = {}
+    try:
+        temps = psutil.sensors_temperatures(fahrenheit=False)
+        sensors["temperatures"] = {k: [t.current for t in v] for k, v in temps.items()}
+    except Exception:
+        sensors["temperatures"] = "N/A"
+    try:
+        fans = psutil.sensors_fans()
+        sensors["fans"] = {k: [f.current for f in v] for k, v in fans.items()}
+    except Exception:
+        sensors["fans"] = "N/A"
+    return sensors
+
+
+def gather_network_scan(subnet):
+    from scapy.all import ARP, Ether, srp
+
+    results = []
+    try:
+        arp = ARP(pdst=subnet)
+        ether = Ether(dst="ff:ff:ff:ff:ff:ff")
+        packet = ether / arp
+        answered = srp(packet, timeout=2, verbose=False)[0]
+        for _, received in answered:
+            results.append({"ip": received.psrc, "mac": received.hwsrc})
+    except Exception as e:
+        results = [f"Network scan failed: {e}"]
+    return results
+
+
 def gather_other_stats():
     other_stats = OrderedDict()
 
@@ -242,6 +332,9 @@ def gather_system_stats(progress):
         'Memory Stats': progress.add_task("Gathering Memory stats...", total=3),
         'Disk Stats': progress.add_task("Gathering Disk stats...", total=4),
         'Network Stats': progress.add_task("Gathering Network stats...", total=3),
+        'Sensor Stats': progress.add_task("Gathering Sensor stats...", total=2),
+        'GPU Stats': progress.add_task("Gathering GPU stats...", total=2),
+        'CPU Info': progress.add_task("Gathering CPU info...", total=1),
         'Other Stats': progress.add_task("Gathering Other stats...", total=4)
     }
 
@@ -268,6 +361,20 @@ def gather_system_stats(progress):
         system_stats['Network Stats'] = gather_network_stats()
         progress.update(tasks['Network Stats'], advance=2)
 
+        # Sensor Stats
+        progress.update(tasks['Sensor Stats'], advance=1)
+        system_stats['Sensor Stats'] = gather_sensor_stats()
+        progress.update(tasks['Sensor Stats'], advance=1)
+
+        # GPU Stats
+        progress.update(tasks['GPU Stats'], advance=1)
+        system_stats['GPU Stats'] = gather_gpu_stats()
+        progress.update(tasks['GPU Stats'], advance=1)
+
+        # CPU Info
+        progress.update(tasks['CPU Info'], advance=1)
+        system_stats['CPU Info'] = gather_cpu_info_details()
+
         # Other Stats
         progress.update(tasks['Other Stats'], advance=1)
         system_stats['Other Stats'] = gather_other_stats()
@@ -281,6 +388,10 @@ def gather_system_stats(progress):
 
 
 def query_gpt(system_stats, user_query="Tell me about my computer."):
+    client = get_openai_client()
+    if client is None:
+        return "OpenAI API key not configured."
+
     spinner = Spinner("dots", text="Querying GPT...")
     response = ""
     with Live(spinner, refresh_per_second=20, transient=True, vertical_overflow="visible") as live:
@@ -312,6 +423,23 @@ def query_gpt(system_stats, user_query="Tell me about my computer."):
     return response.strip()
 
 
+def generate_insights(system_stats):
+    insights = []
+    try:
+        cpu_usage = system_stats["CPU Stats"]["CPU Usage"]["Overall"]
+        if cpu_usage > 80:
+            insights.append(f"High CPU usage detected: {cpu_usage}%")
+        mem_percent = system_stats["Memory Stats"]["Virtual Memory"]["Percent"]
+        if mem_percent > 80:
+            insights.append(f"Memory usage is high at {mem_percent}%")
+        disk_percent = system_stats["Disk Stats"]["Disk Usage"]["Percent"]
+        if disk_percent > 90:
+            insights.append(f"Disk almost full: {disk_percent}% used")
+    except Exception:
+        pass
+    return insights
+
+
 def create_stats_table(system_stats):
     panels = []
     table = Table(box=box.HORIZONTALS, show_header=False, show_lines=True, border_style="magenta")
@@ -331,7 +459,7 @@ def create_stats_table(system_stats):
                 for sub_metric, value in details.items():
                     nested_table.add_row(sub_metric, format_value(value))
                 category_table.add_row(metric, nested_table)
-            elif isinstance(details, list) and metric in ["Disk Partitions", "Network Connections", "Users"]:
+            elif isinstance(details, list) and metric in ["Disk Partitions", "Network Connections", "Users", "Network Scan", "GPU Stats"]:
                 nested_table = Table(box=box.SIMPLE, show_header=True)
                 if details:
                     headers = details[0].keys()
@@ -346,18 +474,41 @@ def create_stats_table(system_stats):
 
     return table
 
+
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Advanced system statistics tool")
+    parser.add_argument("--query", help="Ask a question about the gathered stats")
+    parser.add_argument("--export", help="Write the stats to a JSON file")
+    parser.add_argument("--scan", help="Subnet to scan for active hosts")
+    args = parser.parse_args()
+
     console = Console()
 
     with Progress() as progress:
         system_stats = gather_system_stats(progress)
 
+    if args.scan:
+        system_stats["Network Scan"] = gather_network_scan(args.scan)
+
+    insights = generate_insights(system_stats)
+
     stats_display_table = create_stats_table(system_stats)
     console.print(stats_display_table)
 
-    while True:
-        user_query = input("Ask me a question about your system (exit to quit): ")
-        if user_query.lower() == "exit":
-            break
-        response = query_gpt(system_stats, user_query)
+    if insights:
+        console.print(Panel("\n".join(insights), title="Insights", style="yellow"))
+
+    if args.export:
+        with open(args.export, "w") as f:
+            json.dump(system_stats, f, indent=2)
+
+    if args.query:
+        response = query_gpt(system_stats, args.query)
         console.print(Markdown(response))
+    else:
+        while True:
+            user_query = input("Ask me a question about your system (exit to quit): ")
+            if user_query.lower() == "exit":
+                break
+            response = query_gpt(system_stats, user_query)
+            console.print(Markdown(response))

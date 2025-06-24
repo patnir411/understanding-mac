@@ -725,13 +725,19 @@ if __name__ == "__main__":
                         border_style=insights_border_style if insights else "panel.border", expand=True
                     )
 
-                    if "insights_footer" not in main_layout["footer"] or "gpt_footer" not in main_layout["footer"]:
-                         main_layout["footer"].split_row(
+                    # Get the actual footer Layout object we intend to modify or check
+                    footer_section_layout = main_layout["footer"]
+
+                    # Check if the sub-layouts exist within this footer_section_layout
+                    if "insights_footer" not in footer_section_layout or "gpt_footer" not in footer_section_layout:
+                         footer_section_layout.split_row( # Split the footer_section_layout
                             Layout(insights_panel_for_footer, name="insights_footer", ratio=1),
                             Layout(gpt_panel_content, name="gpt_footer", ratio=1)
                         )
                     else:
-                        main_layout["gpt_footer"].update(gpt_panel_content)
+                        # "insights_footer" and "gpt_footer" exist, update "gpt_footer"
+                        # Access "gpt_footer" as a child of footer_section_layout
+                        footer_section_layout["gpt_footer"].update(gpt_panel_content)
 
                     live.update(main_layout)
 

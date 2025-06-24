@@ -26,12 +26,12 @@ from utils import (
     format_value,
     format_bytes,
     format_time,
-    highlight_critical_values,
-    format_disk_partitions,
-    format_memory_details,
-    format_swap_memory_details,
-    format_disk_details,
-    format_network_connections,
+    # highlight_critical_values, # Removed, no longer used
+    # format_disk_partitions,    # Removed, no longer used
+    # format_memory_details,     # Removed, no longer used
+    # format_swap_memory_details,# Removed, no longer used
+    # format_disk_details,       # Removed, no longer used
+    # format_network_connections,# Removed, no longer used
 )
 
 try:

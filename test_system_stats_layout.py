@@ -83,44 +83,61 @@ class TestSystemStatsLayout(unittest.TestCase):
         gpt_response_panel = Panel(Text("GPT Response"), name="gpt_response_panel")
 
         footer_section = main_layout["footer"]
+        is_footer_split = False # Simulate the flag from system_stats.py
 
-        # 2. Simulate first pass of the loop (footer should be split)
-        self.assertNotIn("insights_footer", footer_section, "Footer should not initially contain 'insights_footer'")
-        self.assertNotIn("gpt_footer", footer_section, "Footer should not initially contain 'gpt_footer'")
+        # Mock panels for different states
+        insights_panel = Panel(Text("Test Insights"), name="insights_panel_for_test") # Added suffix for clarity
+        gpt_prompt_panel = Panel(Text("GPT Prompt"), name="gpt_prompt_panel_for_test")
+        querying_gpt_panel = Panel(Text("Querying GPT..."), name="querying_gpt_panel_for_test")
+        gpt_response_panel = Panel(Text("GPT Response"), name="gpt_response_panel_for_test")
 
-        # Logic from system_stats.py:
-        if "insights_footer" not in footer_section or "gpt_footer" not in footer_section:
+
+        # --- Pass 1: Initial setup of prompt ---
+        self.assertFalse(is_footer_split, "is_footer_split should be False initially")
+        # Simulate the logic from system_stats.py for displaying the initial prompt
+        if not is_footer_split:
             footer_section.split_row(
                 Layout(insights_panel, name="insights_footer", ratio=1),
-                Layout(gpt_prompt_panel, name="gpt_footer", ratio=1)
+                Layout(gpt_prompt_panel, name="gpt_footer", ratio=1) # gpt_footer gets the prompt panel
             )
+            is_footer_split = True
         else:
-            self.fail("Footer splitting logic failed on first pass - thought sublayouts existed.")
+            self.fail("Test logic error: is_footer_split was True on first pass simulation.")
 
-        self.assertIn("insights_footer", footer_section, "Footer should now contain 'insights_footer'")
-        self.assertIn("gpt_footer", footer_section, "Footer should now contain 'gpt_footer'")
+        self.assertTrue(is_footer_split, "is_footer_split should now be True")
+        self.assertIn("insights_footer", footer_section, "Footer should contain 'insights_footer' after split")
+        self.assertIn("gpt_footer", footer_section, "Footer should contain 'gpt_footer' after split")
+        # At this point, footer_section["gpt_footer"] contains gpt_prompt_panel
 
-        # Verify content (optional, but good for sanity)
-        # This is tricky as update() replaces the Layout object with the renderable if not split.
-        # After split_row, footer_section["insights_footer"] is a Layout.
-        # To check the panel inside, you might need a more complex setup or trust the split.
-        # For now, presence of named layouts is the key.
-
-        # 3. Simulate second pass of the loop (gpt_footer should be updated)
-        # Logic from system_stats.py:
-        if "insights_footer" not in footer_section or "gpt_footer" not in footer_section:
-            self.fail("Footer update logic failed on second pass - thought sublayouts didn't exist.")
+        # --- Pass 2: Simulating loop for next prompt (e.g., after a GPT response) ---
+        # The prompt panel would be re-asserted
+        if not is_footer_split:
+            self.fail("Test logic error: is_footer_split was False on second pass simulation for prompt.")
         else:
-            footer_section["gpt_footer"].update(gpt_response_panel) # Update with new panel
+            # Footer is already split, just update the gpt_footer part with the prompt panel
+            footer_section["gpt_footer"].update(gpt_prompt_panel) # Re-set the prompt panel
 
-        # No direct way to get the panel back from Layout.update to check its name attribute here easily.
-        # The main check is that the above .update() call did not raise a KeyError.
-        # We can also check that "gpt_footer" still exists.
-        self.assertIn("gpt_footer", footer_section, "'gpt_footer' should still exist after update.")
+        # Check it didn't crash and gpt_footer still there
+        self.assertIn("gpt_footer", footer_section, "'gpt_footer' must exist after re-setting prompt.")
 
-        # If we wanted to verify the *content* of the updated panel, we'd need to render the layout
-        # and inspect the output, which is more complex than a unit test typically does.
-        # Rich's testing often involves snapshot testing for visuals.
+
+        # --- Simulate updating gpt_footer to "Querying GPT..." ---
+        # This happens after user input, before calling query_gpt()
+        try:
+            footer_section["gpt_footer"].update(querying_gpt_panel)
+        except KeyError:
+            self.fail("KeyError when trying to update gpt_footer to 'Querying GPT...' status.")
+        self.assertIn("gpt_footer", footer_section, "'gpt_footer' must exist after setting 'Querying' status.")
+
+
+        # --- Simulate updating gpt_footer with the actual response ---
+        # This happens after query_gpt() returns
+        try:
+            footer_section["gpt_footer"].update(gpt_response_panel)
+        except KeyError:
+            self.fail("KeyError when trying to update gpt_footer with GPT response.")
+        self.assertIn("gpt_footer", footer_section, "'gpt_footer' must exist after showing response.")
+
 
 if __name__ == '__main__':
     unittest.main()

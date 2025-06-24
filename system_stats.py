@@ -716,8 +716,10 @@ if __name__ == "__main__":
 
         else:
             try:
+                is_footer_split = False # State variable for interactive mode footer
                 while True:
-                    gpt_panel_content = Panel(Text("Enter your query below. Type 'exit' to quit.", justify="center", style="info"), title=gpt_query_title, border_style="panel.border", expand=True)
+                    # Panel for prompting user input (will be placed in gpt_footer or used to create it)
+                    gpt_prompt_panel = Panel(Text("Enter your query below. Type 'exit' to quit.", justify="center", style="info"), title=gpt_query_title, border_style="panel.border", expand=True)
 
                     insights_panel_for_footer = Panel(
                         Text("\n".join(insights) if insights else "No critical insights.", justify="center", style="warning" if insights else "info"),
@@ -725,21 +727,19 @@ if __name__ == "__main__":
                         border_style=insights_border_style if insights else "panel.border", expand=True
                     )
 
-                    # Get the actual footer Layout object we intend to modify or check
                     footer_section_layout = main_layout["footer"]
 
-                    # Check if the sub-layouts exist within this footer_section_layout
-                    if "insights_footer" not in footer_section_layout or "gpt_footer" not in footer_section_layout:
-                         footer_section_layout.split_row( # Split the footer_section_layout
+                    if not is_footer_split:
+                        footer_section_layout.split_row(
                             Layout(insights_panel_for_footer, name="insights_footer", ratio=1),
-                            Layout(gpt_panel_content, name="gpt_footer", ratio=1)
+                            Layout(gpt_prompt_panel, name="gpt_footer", ratio=1) # gpt_footer gets the prompt panel
                         )
+                        is_footer_split = True
                     else:
-                        # "insights_footer" and "gpt_footer" exist, update "gpt_footer"
-                        # Access "gpt_footer" as a child of footer_section_layout
-                        footer_section_layout["gpt_footer"].update(gpt_panel_content)
+                        # Footer is already split, just update the gpt_footer part with the prompt panel
+                        footer_section_layout["gpt_footer"].update(gpt_prompt_panel)
 
-                    live.update(main_layout)
+                    live.update(main_layout) # Show prompt area
 
                     live.stop()
                     user_query = console.input(Text("Ask me a question about your system (exit to quit): ", style="info"))

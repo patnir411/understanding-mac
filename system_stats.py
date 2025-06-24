@@ -9,6 +9,7 @@ from rich.markdown import Markdown
 from rich.spinner import Spinner
 from rich.tree import Tree
 from rich.table import Table
+from rich.theme import Theme # Moved here for global scope
 
 import argparse
 import json
@@ -604,7 +605,7 @@ def create_system_layout(system_stats: OrderedDict, current_theme: Theme) -> Lay
 
 
 if __name__ == "__main__":
-from rich.theme import Theme
+    # from rich.theme import Theme # Moved to global imports at the top
 
     parser = argparse.ArgumentParser(description="Advanced system statistics tool")
     parser.add_argument("--query", help="Ask a question about the gathered stats")

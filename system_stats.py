@@ -3,9 +3,11 @@ from rich.panel import Panel
 from rich.progress import Progress
 from rich.text import Text
 from rich.box import ROUNDED
+from rich.bar import Bar
 from rich.live import Live
 from rich.markdown import Markdown
 from rich.spinner import Spinner
+from rich.tree import Tree
 from rich.table import Table
 
 import argparse
@@ -440,75 +442,316 @@ def generate_insights(system_stats):
     return insights
 
 
-def create_stats_table(system_stats):
-    panels = []
-    table = Table(box=box.HORIZONTALS, show_header=False, show_lines=True, border_style="magenta")
-    table.add_column("Category", style="bold cyan", width=20)
-    table.add_column("Details", style="green")
+from rich.layout import Layout
 
-    for category, stats in system_stats.items():
-        category_table = Table(box=box.ROUNDED, show_lines=True, show_header=False)
-        category_table.add_column("Metric", style="cyan")
-        category_table.add_column("Value")
 
-        for metric, details in stats.items():
-            if isinstance(details, dict):
-                nested_table = Table(box=box.SIMPLE, show_header=False)
-                nested_table.add_column("Sub-Metric", style="dim cyan")
-                nested_table.add_column("Value")
+def create_panel_for_category(category_name: str, category_data: OrderedDict) -> Panel:
+    """Creates a Rich Panel for a single category of stats."""
+    # Using theme styles for table and panel elements
+    category_table = Table(box=box.ROUNDED, show_lines=True, show_header=False, title_style="panel.title", border_style="panel.border")
+    category_table.add_column("Metric", style="table.header", no_wrap=True)
+    category_table.add_column("Value", style="table.cell")
+
+    for metric, details in category_data.items():
+        # --- Direct Bar Rendering ---
+        if metric == "Overall" and category_name == "CPU Stats" and isinstance(details, (float, int)):
+            bar = Bar(total=100, completed=details, width=30, complete_style="bar.complete", finished_style="bar.finished")
+            category_table.add_row(metric, bar)
+        # --- Tree Rendering ---
+        elif metric == "Disk Partitions" and isinstance(details, list) and details:
+            tree = Tree(f"[table.header]{metric}[/]", guide_style="rule.line")
+            for partition in details:
+                if isinstance(partition, dict):
+                    node_label = format_value(partition.get('Device', 'N/A'))
+                    node = tree.add(Text(node_label, style="info"))
+                    node.add(f"Mount: {format_value(partition.get('Mountpoint'))}")
+                    node.add(f"Type: {format_value(partition.get('FSType'))}")
+                    node.add(f"Opts: {format_value(partition.get('Opts'))}")
+                else:
+                    tree.add(Text(str(partition), style="warning"))
+            category_table.add_row(Text(metric, style="table.header"), tree) # Add metric name separately if tree is the value
+        elif metric == "Network Interfaces" and isinstance(details, dict) and details: # details is a dict of ifaces
+            tree = Tree(f"[table.header]{metric}[/]", guide_style="rule.line")
+            for iface_name, addr_list in details.items(): # details is the dict of interfaces
+                iface_node = tree.add(Text(iface_name, style="info"))
+                if isinstance(addr_list, list):
+                    for addr_info in addr_list:
+                        if isinstance(addr_info, dict):
+                            addr_label = f"{format_value(addr_info.get('Family'))}: {format_value(addr_info.get('Address'))}"
+                            addr_node = iface_node.add(Text(addr_label))
+                            addr_node.add(f"Netmask: {format_value(addr_info.get('Netmask'))}")
+                            addr_node.add(f"Broadcast: {format_value(addr_info.get('Broadcast'))}")
+                        else:
+                            iface_node.add(Text(str(addr_info), style="warning"))
+                else:
+                     iface_node.add(Text(f"Unexpected data: {addr_list}", style="warning"))
+            category_table.add_row(Text(metric, style="table.header"), tree)
+        # --- Nested Dictionary Handling (potentially with Bars) ---
+        elif isinstance(details, dict):
+            # Special handling for Memory Stats to correctly place bars
+            if category_name == "Memory Stats" and (metric == "Virtual Memory" or metric == "Swap Memory"):
+                sub_table = Table(box=box.SIMPLE, show_header=False, border_style="panel.border")
+                sub_table.add_column("Sub-Metric", style="info")
+                sub_table.add_column("Value", style="table.cell")
                 for sub_metric, value in details.items():
-                    nested_table.add_row(sub_metric, format_value(value))
-                category_table.add_row(metric, nested_table)
-            elif isinstance(details, list) and metric in ["Disk Partitions", "Network Connections", "Users", "Network Scan", "GPU Stats"]:
-                nested_table = Table(box=box.SIMPLE, show_header=True)
-                if details:
-                    headers = details[0].keys()
+                    if sub_metric == "Percent" and isinstance(value, (float, int)):
+                        bar = Bar(total=100, completed=value, width=30, complete_style="bar.complete", finished_style="bar.finished")
+                        sub_table.add_row(sub_metric, bar)
+                    else:
+                        sub_table.add_row(sub_metric, format_value(value))
+                category_table.add_row(metric, sub_table)
+            # Special handling for Disk Usage Percent Bar
+            elif category_name == "Disk Stats" and metric == "Disk Usage":
+                sub_table = Table(box=box.SIMPLE, show_header=False, border_style="panel.border")
+                sub_table.add_column("Sub-Metric", style="info")
+                sub_table.add_column("Value", style="table.cell")
+                for sub_metric, value in details.items():
+                    if sub_metric == "Percent" and isinstance(value, (float, int)):
+                        bar = Bar(total=100, completed=value, width=30, complete_style="bar.complete", finished_style="bar.finished")
+                        sub_table.add_row(sub_metric, bar)
+                    else:
+                        sub_table.add_row(sub_metric, format_value(value))
+                category_table.add_row(metric, sub_table)
+            else: # Generic nested dictionary
+                sub_table = Table(box=box.SIMPLE, show_header=False, border_style="panel.border")
+                sub_table.add_column("Sub-Metric", style="info")
+                sub_table.add_column("Value", style="table.cell")
+                for sub_metric, value in details.items():
+                    sub_table.add_row(sub_metric, format_value(value))
+                category_table.add_row(metric, sub_table)
+        # --- List Handling (fallback to Table) ---
+        elif isinstance(details, list):
+            # Handles Users, Network Connections, GPU Stats (success/error list), Processes['Details']
+            list_table = Table(box=box.SIMPLE, show_header=True, border_style="panel.border")
+            if details:
+                if all(isinstance(item, dict) for item in details):
+                    headers = details[0].keys() # Assumes all dicts have same keys
                     for header in headers:
-                        nested_table.add_column(header.capitalize(), style="dim cyan")
+                        list_table.add_column(header.capitalize(), style="info")
                     for item in details:
-                        nested_table.add_row(*[format_value(item[header]) for header in headers])
-                category_table.add_row(metric, nested_table)
+                        list_table.add_row(*[format_value(item.get(header, "N/A")) for header in headers])
+                elif all(isinstance(item, str) for item in details): # For GPU error messages as list of str
+                    list_table.show_header = False # No headers for simple list of strings
+                    for item_str in details:
+                        list_table.add_row(Text(item_str, style="warning"))
+                else: # Mixed or other non-dict list content
+                     category_table.add_row(metric, Text(f"List: {str(details)[:100]}...", style="italic warning")) # Truncate
+                     continue # Skip adding this list_table if format is too weird
             else:
-                category_table.add_row(metric, format_value(details))
-        table.add_row(category, category_table)
+                list_table.add_row(Text("No data available.", style="italic info"))
+            category_table.add_row(metric, list_table)
+        # --- Simple Key-Value Fallback ---
+        else:
+            category_table.add_row(metric, format_value(details))
 
-    return table
+    # Panel title uses a specific color, border uses theme's panel.border
+    return Panel(category_table, title=f"[{custom_theme.styles['panel.title']}]{category_name}[/]", border_style="panel.border", expand=True)
+
+
+def create_system_layout(system_stats: OrderedDict, current_theme: Theme) -> Layout:
+    """Creates the layout for displaying system statistics."""
+    layout = Layout(name="root")
+
+    layout.split_column(
+        Layout(name="header", size=3),
+        Layout(name="main"),
+        Layout(name="footer", size=5)
+    )
+
+    layout["main"].split_row(
+        Layout(name="left_column"),
+        Layout(name="right_column"),
+    )
+
+    layout["left_column"].split_column(
+        Layout(name="cpu_mem", ratio=2),
+        Layout(name="disk_net", ratio=3)
+    )
+    layout["cpu_mem"].split_row(Layout(name="cpu"), Layout(name="memory"))
+    layout["disk_net"].split_row(Layout(name="disk"), Layout(name="network"))
+
+    layout["right_column"].split_column(
+        Layout(name="sensors_gpu", ratio=1),
+        Layout(name="other", ratio=2)
+    )
+    layout["sensors_gpu"].split_row(Layout(name="sensors"), Layout(name="gpu"))
+    layout["other"].split_row(Layout(name="cpu_info"), Layout(name="misc"))
+
+    # Populate layout with panels, passing the theme
+    if "CPU Stats" in system_stats:
+        layout["cpu"].update(create_panel_for_category("CPU Stats", system_stats["CPU Stats"]))
+    if "Memory Stats" in system_stats:
+        layout["memory"].update(create_panel_for_category("Memory Stats", system_stats["Memory Stats"]))
+    if "Disk Stats" in system_stats:
+        layout["disk"].update(create_panel_for_category("Disk Stats", system_stats["Disk Stats"]))
+    if "Network Stats" in system_stats:
+        layout["network"].update(create_panel_for_category("Network Stats", system_stats["Network Stats"]))
+    if "Sensor Stats" in system_stats:
+        layout["sensors"].update(create_panel_for_category("Sensor Stats", system_stats["Sensor Stats"]))
+    if "GPU Stats" in system_stats:
+        gpu_data = {"GPU Details": system_stats["GPU Stats"]} if system_stats["GPU Stats"] else {"GPU Details": ["Not available or error"]}
+        layout["gpu"].update(create_panel_for_category("GPU Stats", gpu_data))
+    if "CPU Info" in system_stats:
+        layout["cpu_info"].update(create_panel_for_category("CPU Info", system_stats["CPU Info"]))
+    if "Other Stats" in system_stats:
+        layout["misc"].update(create_panel_for_category("Other System Stats", system_stats["Other Stats"]))
+
+    # Header and Footer using theme styles
+    layout["header"].update(Panel(Text("System Monitor Dashboard", justify="center", style="title"), border_style="panel.border", expand=True))
+    layout["footer"].update(Panel(Text("Insights and GPT query will appear here.", justify="center", style="info"), title="[panel.title]Status[/]",border_style="panel.border", expand=True))
+
+    return layout
 
 
 if __name__ == "__main__":
+from rich.theme import Theme
+
     parser = argparse.ArgumentParser(description="Advanced system statistics tool")
     parser.add_argument("--query", help="Ask a question about the gathered stats")
     parser.add_argument("--export", help="Write the stats to a JSON file")
     parser.add_argument("--scan", help="Subnet to scan for active hosts")
     args = parser.parse_args()
 
-    console = Console()
+    # Define a custom theme
+    custom_theme = Theme({
+        "info": "dim cyan",
+        "warning": "magenta",
+        "danger": "bold red",
+        "title": "bold white on blue", # For main title/header
+        "panel.title": "bold white",   # For panel titles
+        "panel.border": "dim blue",    # For panel borders
+        "table.header": "bold cyan",
+        "table.cell": "green",
+        "table.footer": "dim cyan",
+        "bar.complete": "green",
+        "bar.finished": "dim green",
+        "progress.description": "white",
+        "progress.percentage": "blue",
+        "markdown.code": "bold yellow",
+        "markdown.strong": "bold",
+        "markdown.em": "italic",
+        "repr.number": "blue",
+        "repr.str": "green",
+        "repr.bool_true": "bold green",
+        "repr.bool_false": "bold red",
+        "repr.none": "dim white",
+        "log.level.warning": "yellow",
+        "log.level.error": "red",
+        "log.message": "white",
+        "rule.line": "dim blue",
+        "text.highlight": "bold yellow on dark_magenta" # Example for highlighted text
+    })
 
-    with Progress() as progress:
+    console = Console(theme=custom_theme)
+
+    with Progress(console=console) as progress: # Pass console to Progress as well
         system_stats = gather_system_stats(progress)
 
     if args.scan:
-        system_stats["Network Scan"] = gather_network_scan(args.scan)
+        scan_results = gather_network_scan(args.scan)
+        # Ensure "Other Stats" exists and add "Network Scan" to it for display
+        if "Other Stats" not in system_stats:
+            system_stats["Other Stats"] = OrderedDict()
+        elif not isinstance(system_stats["Other Stats"], OrderedDict) and system_stats["Other Stats"] is not None : # If it exists but is not a dict (e.g. error string)
+             system_stats["Other Stats"] = OrderedDict([("previous_error", system_stats["Other Stats"])]) # Preserve previous error
+
+        # If "Other Stats" was None or some non-dict error from gather_other_stats
+        if system_stats.get("Other Stats") is None or not isinstance(system_stats.get("Other Stats"), OrderedDict):
+            system_stats["Other Stats"] = OrderedDict()
+
+        system_stats["Other Stats"]["Network Scan"] = scan_results
+
 
     insights = generate_insights(system_stats)
 
-    stats_display_table = create_stats_table(system_stats)
-    console.print(stats_display_table)
+    # Create the main layout, passing the theme
+    main_layout = create_system_layout(system_stats, custom_theme)
 
+    # Update footer with insights if any, using theme styles
+    insights_title = f"[{custom_theme.styles['panel.title']}]Insights[/]"
+    insights_border_style = "warning" # Use warning color for insights border
     if insights:
-        console.print(Panel("\n".join(insights), title="Insights", style="yellow"))
+        main_layout["footer"].update(Panel(Text("\n".join(insights), justify="center", style="warning"), title=insights_title, border_style=insights_border_style, expand=True))
+    else:
+        main_layout["footer"].update(Panel(Text("No critical insights to display.", justify="center", style="info"), title=insights_title, border_style="panel.border", expand=True))
+
 
     if args.export:
         with open(args.export, "w") as f:
             json.dump(system_stats, f, indent=2)
+        console.print(f"Stats exported to {args.export}", style="info") # Use theme style
 
-    if args.query:
-        response = query_gpt(system_stats, args.query)
-        console.print(Markdown(response))
-    else:
-        while True:
-            user_query = input("Ask me a question about your system (exit to quit): ")
-            if user_query.lower() == "exit":
-                break
-            response = query_gpt(system_stats, user_query)
-            console.print(Markdown(response))
+
+    # Use Live to display the layout and handle updates
+    with Live(main_layout, console=console, screen=True, refresh_per_second=1, vertical_overflow="visible") as live:
+        gpt_query_title = f"[{custom_theme.styles['panel.title']}]GPT Query[/]"
+        gpt_response_title = f"[{custom_theme.styles['panel.title']}]GPT Response[/]"
+
+        if args.query:
+            time.sleep(0.5)
+
+            gpt_panel_content = Panel("Querying GPT...", title=gpt_query_title, border_style="panel.border", expand=True)
+            insights_panel_for_footer = Panel(
+                Text("\n".join(insights) if insights else "No critical insights.", justify="center", style="warning" if insights else "info"),
+                title=insights_title,
+                border_style=insights_border_style if insights else "panel.border", expand=True
+            )
+            main_layout["footer"].split_row(
+                Layout(insights_panel_for_footer, name="insights_footer", ratio=1),
+                Layout(gpt_panel_content, name="gpt_footer", ratio=1)
+            )
+            live.update(main_layout)
+
+            response = query_gpt(system_stats, args.query)
+
+            gpt_response_panel = Panel(Markdown(response), title=gpt_response_title, border_style="info", expand=True) # Use info for successful response
+            main_layout["gpt_footer"].update(gpt_response_panel)
+            live.update(main_layout)
+
+            try:
+                while True: time.sleep(1)
+            except KeyboardInterrupt:
+                console.print("\nExiting...", style="info")
+
+        else:
+            try:
+                while True:
+                    gpt_panel_content = Panel(Text("Enter your query below. Type 'exit' to quit.", justify="center", style="info"), title=gpt_query_title, border_style="panel.border", expand=True)
+
+                    insights_panel_for_footer = Panel(
+                        Text("\n".join(insights) if insights else "No critical insights.", justify="center", style="warning" if insights else "info"),
+                        title=insights_title,
+                        border_style=insights_border_style if insights else "panel.border", expand=True
+                    )
+
+                    if "insights_footer" not in main_layout["footer"] or "gpt_footer" not in main_layout["footer"]:
+                         main_layout["footer"].split_row(
+                            Layout(insights_panel_for_footer, name="insights_footer", ratio=1),
+                            Layout(gpt_panel_content, name="gpt_footer", ratio=1)
+                        )
+                    else:
+                        main_layout["gpt_footer"].update(gpt_panel_content)
+
+                    live.update(main_layout)
+
+                    live.stop()
+                    user_query = console.input(Text("Ask me a question about your system (exit to quit): ", style="info"))
+                    live.start()
+
+                    if user_query.lower() == "exit":
+                        break
+
+                    gpt_panel_content_querying = Panel("Querying GPT...", title=gpt_query_title, border_style="panel.border", expand=True)
+                    main_layout["gpt_footer"].update(gpt_panel_content_querying)
+                    live.update(main_layout)
+
+                    response = query_gpt(system_stats, user_query)
+                    gpt_response_panel = Panel(Markdown(response), title=gpt_response_title, border_style="info", expand=True)
+                    main_layout["gpt_footer"].update(gpt_response_panel)
+                    live.update(main_layout)
+
+            except KeyboardInterrupt:
+                console.print("\nExiting...", style="info")
+            finally:
+                live.stop()
+                console.print("Exited interactive mode.", style="info")

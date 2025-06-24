@@ -33,67 +33,12 @@ def highlight_critical_values(category, stats):
     if category == "Disk Usage" and stats > 80:
         return f"[red]{stats}%[/red]"
     return stats
+# Removed highlight_critical_values as it's unused.
+# The functionality of highlighting critical data is now partly visual (Bars)
+# or handled by the 'Insights' panel.
 
-def format_disk_partitions(partitions):
-    formatted_partitions = []
-    for partition in partitions:
-        details = [
-            f"Device: {partition['device']}",
-            f"Mountpoint: {partition['mountpoint']}",
-            f"Filesystem Type: {partition['fstype']}",
-            f"Options: {partition['opts']}",
-            f"Max File: {partition['maxfile']}",
-            f"Max Path: {partition['maxpath']}"
-        ]
-        formatted_partitions.append("\n".join(details))
-    return "\n\n".join(formatted_partitions)
-
-def format_memory_details(memory):
-    details = []
-    for key, value in memory.items():
-        if "percent" in key:
-            formatted_value = f"{value:.2f}%"
-            if value > 80:
-                formatted_value = f"[red]{formatted_value}[/red]"
-            details.append(f"{key}: {formatted_value}")
-        else:
-            formatted_value = humanize.naturalsize(value, binary=True)
-            details.append(f"{key}: {formatted_value}")
-    return "\n".join(details)
-
-def format_swap_memory_details(swap):
-    details = []
-    for key, value in swap.items():
-        if "percent" in key:
-            formatted_value = f"{value:.2f}%"
-            if value > 80:
-                formatted_value = f"[red]{formatted_value}[/red]"
-            details.append(f"{key}: {formatted_value}")
-        else:
-            formatted_value = humanize.naturalsize(value, binary=True)
-            details.append(f"{key}: {formatted_value}")
-    return "\n".join(details)
-
-def format_disk_details(disk_details):
-    formatted_details = [
-        f"Total: {humanize.naturalsize(disk_details['total'], binary=True)}",
-        f"Used: {humanize.naturalsize(disk_details['used'], binary=True)}",
-        f"Free: {humanize.naturalsize(disk_details['free'], binary=True)}",
-        f"Percent: {disk_details['percent']}%"
-    ]
-    return "\n".join(formatted_details)
-
-def format_network_connections(connections):
-    formatted_connections = []
-    for conn in connections[:10]:
-        details = [
-            f"FD: {conn['fd']}",
-            f"Family: {conn['family'].name}",
-            f"Type: {conn['type'].name}",
-            f"Laddr: {conn['laddr']}",
-            f"Raddr: {conn['raddr']}",
-            f"Status: {conn['status']}",
-            f"PID: {conn['pid']}"
-        ]
-        formatted_connections.append(", ".join(details))
-    return "\n".join(formatted_connections)
+# Removed format_disk_partitions as Disk Partitions are now displayed using a Rich Tree.
+# Removed format_memory_details as Memory details are now displayed per metric in a table, with percentages as Bars.
+# Removed format_swap_memory_details for the same reason as format_memory_details.
+# Removed format_disk_details for the same reason as format_memory_details.
+# Removed format_network_connections as Network Connections are now displayed in a Rich Table.

@@ -1,9 +1,9 @@
 from rich.console import Console
 from rich.panel import Panel
-from rich.progress import Progress
+from rich.progress import Progress, ProgressBar
 from rich.text import Text
 from rich.box import ROUNDED
-from rich.bar import Bar
+from rich.bar import Bar # Keep for now, ensure it's not used elsewhere inadvertently, or remove if confirmed.
 from rich.live import Live
 from rich.markdown import Markdown
 from rich.spinner import Spinner
@@ -456,7 +456,7 @@ def create_panel_for_category(category_name: str, category_data: OrderedDict) ->
     for metric, details in category_data.items():
         # --- Direct Bar Rendering ---
         if metric == "Overall" and category_name == "CPU Stats" and isinstance(details, (float, int)):
-            bar = Bar(total=100, completed=details, width=30, complete_style="bar.complete", finished_style="bar.finished")
+            bar = Bar(size=100, begin=0, end=details, complete_style="bar.complete", finished_style="bar.finished")
             category_table.add_row(metric, bar)
         # --- Tree Rendering ---
         elif metric == "Disk Partitions" and isinstance(details, list) and details:
@@ -496,7 +496,7 @@ def create_panel_for_category(category_name: str, category_data: OrderedDict) ->
                 sub_table.add_column("Value", style="table.cell")
                 for sub_metric, value in details.items():
                     if sub_metric == "Percent" and isinstance(value, (float, int)):
-                        bar = Bar(total=100, completed=value, width=30, complete_style="bar.complete", finished_style="bar.finished")
+                        bar = Bar(size=100, begin=0, end=value, complete_style="bar.complete", finished_style="bar.finished")
                         sub_table.add_row(sub_metric, bar)
                     else:
                         sub_table.add_row(sub_metric, format_value(value))
@@ -508,7 +508,7 @@ def create_panel_for_category(category_name: str, category_data: OrderedDict) ->
                 sub_table.add_column("Value", style="table.cell")
                 for sub_metric, value in details.items():
                     if sub_metric == "Percent" and isinstance(value, (float, int)):
-                        bar = Bar(total=100, completed=value, width=30, complete_style="bar.complete", finished_style="bar.finished")
+                        bar = Bar(size=100, begin=0, end=value, complete_style="bar.complete", finished_style="bar.finished")
                         sub_table.add_row(sub_metric, bar)
                     else:
                         sub_table.add_row(sub_metric, format_value(value))

@@ -73,11 +73,45 @@ class TestSystemStatsLayout(unittest.TestCase):
         self.theme_patcher.stop()
 
     def _get_renderable_from_panel(self, panel: Panel, metric_name: str):
-        if not isinstance(panel, Panel) or not hasattr(panel.renderable, 'rows'): return None
-        for row_cells in panel.renderable.rows:
-            metric_cell_renderable = row_cells[0].renderable
-            metric_text = metric_cell_renderable.plain if isinstance(metric_cell_renderable, Text) else str(metric_cell_renderable)
-            if metric_text == metric_name: return row_cells[1].renderable
+        if not isinstance(panel, Panel): return None
+        table = panel.renderable # This is the main Table in the Panel
+
+        # Ensure 'table' is actually a Table and has the expected structure
+        if not isinstance(table, Table) or not hasattr(table, 'columns') or len(table.columns) < 2:
+            # print(f"Debug: _get_renderable_from_panel: panel.renderable is not a valid Table or has < 2 columns. Type: {type(table)}")
+            return None
+
+        # Iterate through the cells of the first column (metric names)
+        # table.columns[0] is the first Column object.
+        # table.columns[0].cells is a list of renderables in that column.
+        try:
+            metric_column_cells = table.columns[0].cells
+            value_column_cells = table.columns[1].cells
+        except IndexError:
+            # This can happen if the table doesn't have two columns as expected
+            # print(f"Debug: _get_renderable_from_panel: Table columns are fewer than expected. Columns: {len(table.columns)}")
+            return None
+
+        for i, metric_cell_content in enumerate(metric_column_cells):
+            metric_text = ""
+            if isinstance(metric_cell_content, Text):
+                metric_text = metric_cell_content.plain
+            elif isinstance(metric_cell_content, str):
+                metric_text = metric_cell_content
+            # Add other simple renderable types if necessary, e.g. if a metric name itself is a number.
+            # For this specific use case, metric names are generally Text or strings.
+
+            if metric_text == metric_name:
+                # Return the corresponding cell content from the second column (values)
+                if i < len(value_column_cells):
+                    return value_column_cells[i]
+                else:
+                    # This case (metric found but no corresponding value cell) should ideally not happen
+                    # if the table is constructed correctly with pairs of metric names and values.
+                    # print(f"Debug: _get_renderable_from_panel: Metric '{metric_name}' found at index {i}, but no corresponding value cell.")
+                    return None # Should not happen if table is well-formed
+
+        # print(f"Debug: _get_renderable_from_panel: Metric '{metric_name}' not found in table.")
         return None
 
     # --- Tests for create_panel_for_category ---
@@ -200,7 +234,8 @@ class TestSystemStatsLayout(unittest.TestCase):
         expected_calls = [
             call("CPU Stats", stats_data["CPU Stats"]), call("Memory Stats", stats_data["Memory Stats"]),
             call("Disk Stats", stats_data["Disk Stats"]), call("Network Stats", stats_data["Network Stats"]),
-            call("Sensor Stats", stats_data["Sensor Stats"]), call("GPU Stats", {"GPU Details": stats_data["GPU Stats"]}),
+            call("Sensor Stats", stats_data["Sensor Stats"]),
+            call("GPU Stats", {"GPU Details": ["Not available or error"]}), # Corrected expectation for empty GPU list
             call("CPU Info", stats_data["CPU Info"]), call("Other System Stats", stats_data["Other Stats"])
         ]
         mock_cpfc_func.assert_has_calls(expected_calls, any_order=False)

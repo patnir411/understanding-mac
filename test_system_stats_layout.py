@@ -6,7 +6,7 @@ from rich.layout import Layout
 from rich.panel import Panel
 from rich.text import Text
 from rich.theme import Theme
-from rich.bar import Bar
+from rich.progress import ProgressBar # Changed from Bar
 from rich.tree import Tree
 from rich.table import Table
 
@@ -83,10 +83,10 @@ class TestSystemStatsLayout(unittest.TestCase):
 
         # Iterate through the cells of the first column (metric names)
         # table.columns[0] is the first Column object.
-        # table.columns[0].cells is a list of renderables in that column.
+        # table.columns[0].cells is a generator; convert to list for len() and indexing.
         try:
-            metric_column_cells = table.columns[0].cells
-            value_column_cells = table.columns[1].cells
+            metric_column_cells = list(table.columns[0].cells)
+            value_column_cells = list(table.columns[1].cells)
         except IndexError:
             # This can happen if the table doesn't have two columns as expected
             # print(f"Debug: _get_renderable_from_panel: Table columns are fewer than expected. Columns: {len(table.columns)}")
@@ -117,7 +117,7 @@ class TestSystemStatsLayout(unittest.TestCase):
     # --- Tests for create_panel_for_category ---
     def test_cpfc_bar_cpu(self):
         panel = create_panel_for_category("CPU Stats", self.cpu_stats_data_for_bar)
-        self.assertIsInstance(self._get_renderable_from_panel(panel, "Overall"), Bar)
+        self.assertIsInstance(self._get_renderable_from_panel(panel, "Overall"), ProgressBar)
 
     def test_cpfc_bar_memory(self):
         panel = create_panel_for_category("Memory Stats", OrderedDict([("Virtual Memory", self.memory_virtual_for_bar)]))
@@ -125,8 +125,9 @@ class TestSystemStatsLayout(unittest.TestCase):
         self.assertIsInstance(sub_table, Table)
         percent_bar = None
         for r_cells in sub_table.rows: # r_cells is list of Cell objects
-            if r_cells[0].renderable.plain == "Percent": percent_bar = r_cells[1].renderable; break
-        self.assertIsInstance(percent_bar, Bar)
+            if hasattr(r_cells[0].renderable, 'plain') and r_cells[0].renderable.plain == "Percent": # Added hasattr check for safety
+                 percent_bar = r_cells[1].renderable; break
+        self.assertIsInstance(percent_bar, ProgressBar)
 
     def test_cpfc_bar_disk_usage(self):
         panel = create_panel_for_category("Disk Stats", OrderedDict([("Disk Usage", self.disk_usage_for_bar)]))
@@ -134,8 +135,9 @@ class TestSystemStatsLayout(unittest.TestCase):
         self.assertIsInstance(sub_table, Table)
         percent_bar = None
         for r_cells in sub_table.rows:
-            if r_cells[0].renderable.plain == "Percent": percent_bar = r_cells[1].renderable; break
-        self.assertIsInstance(percent_bar, Bar)
+            if hasattr(r_cells[0].renderable, 'plain') and r_cells[0].renderable.plain == "Percent": # Added hasattr check
+                 percent_bar = r_cells[1].renderable; break
+        self.assertIsInstance(percent_bar, ProgressBar)
 
     def test_cpfc_tree_disk_partitions(self):
         panel = create_panel_for_category("Disk Stats", OrderedDict([("Disk Partitions", self.disk_partitions_data)]))

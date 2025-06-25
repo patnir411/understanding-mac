@@ -3,7 +3,7 @@ from rich.panel import Panel
 from rich.progress import Progress, ProgressBar
 from rich.text import Text
 from rich.box import ROUNDED
-from rich.bar import Bar # Keep for now, ensure it's not used elsewhere inadvertently, or remove if confirmed.
+# from rich.bar import Bar # No longer used
 from rich.live import Live
 from rich.markdown import Markdown
 from rich.spinner import Spinner
@@ -454,10 +454,11 @@ def create_panel_for_category(category_name: str, category_data: OrderedDict) ->
     category_table.add_column("Value", style="table.cell")
 
     for metric, details in category_data.items():
-        # --- Direct Bar Rendering ---
+        # --- Direct ProgressBar Rendering ---
         if metric == "Overall" and category_name == "CPU Stats" and isinstance(details, (float, int)):
-            bar = Bar(size=100, begin=0, end=details, complete_style="bar.complete", finished_style="bar.finished")
-            category_table.add_row(metric, bar)
+            # ProgressBar: value is 'completed', total is 'total'. width=None for auto.
+            progress_bar = ProgressBar(completed=details, total=100, width=None, style="progress.background", complete_style="bar.complete", finished_style="bar.finished")
+            category_table.add_row(metric, progress_bar)
         # --- Tree Rendering ---
         elif metric == "Disk Partitions" and isinstance(details, list) and details:
             tree = Tree(f"[table.header]{metric}[/]", guide_style="rule.line")
@@ -496,8 +497,8 @@ def create_panel_for_category(category_name: str, category_data: OrderedDict) ->
                 sub_table.add_column("Value", style="table.cell")
                 for sub_metric, value in details.items():
                     if sub_metric == "Percent" and isinstance(value, (float, int)):
-                        bar = Bar(size=100, begin=0, end=value, complete_style="bar.complete", finished_style="bar.finished")
-                        sub_table.add_row(sub_metric, bar)
+                        progress_bar = ProgressBar(completed=value, total=100, width=None, style="progress.background", complete_style="bar.complete", finished_style="bar.finished")
+                        sub_table.add_row(sub_metric, progress_bar)
                     else:
                         sub_table.add_row(sub_metric, format_value(value))
                 category_table.add_row(metric, sub_table)
@@ -508,8 +509,8 @@ def create_panel_for_category(category_name: str, category_data: OrderedDict) ->
                 sub_table.add_column("Value", style="table.cell")
                 for sub_metric, value in details.items():
                     if sub_metric == "Percent" and isinstance(value, (float, int)):
-                        bar = Bar(size=100, begin=0, end=value, complete_style="bar.complete", finished_style="bar.finished")
-                        sub_table.add_row(sub_metric, bar)
+                        progress_bar = ProgressBar(completed=value, total=100, width=None, style="progress.background", complete_style="bar.complete", finished_style="bar.finished")
+                        sub_table.add_row(sub_metric, progress_bar)
                     else:
                         sub_table.add_row(sub_metric, format_value(value))
                 category_table.add_row(metric, sub_table)
@@ -624,8 +625,9 @@ if __name__ == "__main__":
         "table.header": "bold cyan",
         "table.cell": "green",
         "table.footer": "dim cyan",
-        "bar.complete": "green",
-        "bar.finished": "dim green",
+        "bar.complete": "green",      # Style for completed part of ProgressBar
+        "bar.finished": "dim green",   # Style for ProgressBar when 100%
+        "progress.background": "dim blue", # Style for the trough/background of ProgressBar
         "progress.description": "white",
         "progress.percentage": "blue",
         "markdown.code": "bold yellow",

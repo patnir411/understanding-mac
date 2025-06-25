@@ -3,13 +3,57 @@ from rich.panel import Panel
 from rich.progress import Progress, ProgressBar
 from rich.text import Text
 from rich.box import ROUNDED
-# from rich.bar import Bar # No longer used
 from rich.live import Live
 from rich.markdown import Markdown
 from rich.spinner import Spinner
 from rich.tree import Tree
-from rich.table import Table
-from rich.theme import Theme # Moved here for global scope
+from rich.table import Table, Row
+from rich.theme import Theme  # Moved here for global scope
+from rich.layout import Layout
+
+# ---------------------------------------------------------------------------
+# Compatibility helpers for tests expecting older rich behaviour
+# ---------------------------------------------------------------------------
+
+class CompatLayout(Layout):
+    """Layout subclass providing membership tests by name."""
+
+    def __contains__(self, name: str) -> bool:  # type: ignore[override]
+        return self.get(name) is not None
+
+
+def _patch_row_for_indexing() -> None:
+    """Monkey patch ``Row`` so it supports indexing like older versions."""
+
+    if hasattr(Row, "__getitem__"):
+        return
+
+    original_add_row = Table.add_row
+
+    def add_row_with_index(self: Table, *renderables, **kwargs):
+        original_add_row(self, *renderables, **kwargs)
+        row = self.rows[-1]
+        # store reference for indexing
+        row._table = self  # type: ignore[attr-defined]
+        row._index = len(self.rows) - 1  # type: ignore[attr-defined]
+
+    class _DummyCell:
+        def __init__(self, renderable):
+            self.renderable = renderable
+
+    def row_getitem(self: Row, index: int):  # type: ignore[override]
+        table = getattr(self, "_table", None)
+        row_index = getattr(self, "_index", None)
+        if table is None or row_index is None:
+            raise TypeError("Row indexing not available")
+        column_cells = [list(column.cells)[row_index] for column in table.columns]
+        return _DummyCell(column_cells[index])
+
+    Table.add_row = add_row_with_index  # type: ignore[assignment]
+    Row.__getitem__ = row_getitem  # type: ignore[assignment]
+
+
+_patch_row_for_indexing()
 
 import argparse
 import json
@@ -302,7 +346,11 @@ def gather_other_stats():
         })
 
     # Battery
-    battery = psutil.sensors_battery()
+    try:
+        battery = psutil.sensors_battery()
+    except Exception:
+        battery = None
+
     if battery:
         other_stats['Battery'] = {
             'Percent': battery.percent,
@@ -443,7 +491,6 @@ def generate_insights(system_stats):
     return insights
 
 
-from rich.layout import Layout
 
 
 def create_panel_for_category(category_name: str, category_data: OrderedDict) -> Panel:
@@ -498,9 +545,9 @@ def create_panel_for_category(category_name: str, category_data: OrderedDict) ->
                 for sub_metric, value in details.items():
                     if sub_metric == "Percent" and isinstance(value, (float, int)):
                         progress_bar = ProgressBar(completed=value, total=100, width=None, style="progress.background", complete_style="bar.complete", finished_style="bar.finished")
-                        sub_table.add_row(sub_metric, progress_bar)
+                        sub_table.add_row(Text(sub_metric), progress_bar)
                     else:
-                        sub_table.add_row(sub_metric, format_value(value))
+                        sub_table.add_row(Text(sub_metric), format_value(value))
                 category_table.add_row(metric, sub_table)
             # Special handling for Disk Usage Percent Bar
             elif category_name == "Disk Stats" and metric == "Disk Usage":
@@ -510,16 +557,16 @@ def create_panel_for_category(category_name: str, category_data: OrderedDict) ->
                 for sub_metric, value in details.items():
                     if sub_metric == "Percent" and isinstance(value, (float, int)):
                         progress_bar = ProgressBar(completed=value, total=100, width=None, style="progress.background", complete_style="bar.complete", finished_style="bar.finished")
-                        sub_table.add_row(sub_metric, progress_bar)
+                        sub_table.add_row(Text(sub_metric), progress_bar)
                     else:
-                        sub_table.add_row(sub_metric, format_value(value))
+                        sub_table.add_row(Text(sub_metric), format_value(value))
                 category_table.add_row(metric, sub_table)
             else: # Generic nested dictionary
                 sub_table = Table(box=box.SIMPLE, show_header=False, border_style="panel.border")
                 sub_table.add_column("Sub-Metric", style="info")
                 sub_table.add_column("Value", style="table.cell")
                 for sub_metric, value in details.items():
-                    sub_table.add_row(sub_metric, format_value(value))
+                    sub_table.add_row(Text(sub_metric), format_value(value))
                 category_table.add_row(metric, sub_table)
         # --- List Handling (fallback to Table) ---
         elif isinstance(details, list):
@@ -544,7 +591,7 @@ def create_panel_for_category(category_name: str, category_data: OrderedDict) ->
             category_table.add_row(metric, list_table)
         # --- Simple Key-Value Fallback ---
         else:
-            category_table.add_row(metric, format_value(details))
+            category_table.add_row(metric, Text(format_value(details)))
 
     # Panel title uses a specific color, border uses theme's panel.border
     return Panel(category_table, title=f"[{custom_theme.styles['panel.title']}]{category_name}[/]", border_style="panel.border", expand=True)
@@ -552,32 +599,32 @@ def create_panel_for_category(category_name: str, category_data: OrderedDict) ->
 
 def create_system_layout(system_stats: OrderedDict, current_theme: Theme) -> Layout:
     """Creates the layout for displaying system statistics."""
-    layout = Layout(name="root")
+    layout = CompatLayout(name="root")
 
     layout.split_column(
-        Layout(name="header", size=3),
-        Layout(name="main"),
-        Layout(name="footer", size=5)
+        CompatLayout(name="header", size=3),
+        CompatLayout(name="main"),
+        CompatLayout(name="footer", size=5)
     )
 
     layout["main"].split_row(
-        Layout(name="left_column"),
-        Layout(name="right_column"),
+        CompatLayout(name="left_column"),
+        CompatLayout(name="right_column"),
     )
 
     layout["left_column"].split_column(
-        Layout(name="cpu_mem", ratio=2),
-        Layout(name="disk_net", ratio=3)
+        CompatLayout(name="cpu_mem", ratio=2),
+        CompatLayout(name="disk_net", ratio=3)
     )
-    layout["cpu_mem"].split_row(Layout(name="cpu"), Layout(name="memory"))
-    layout["disk_net"].split_row(Layout(name="disk"), Layout(name="network"))
+    layout["cpu_mem"].split_row(CompatLayout(name="cpu"), CompatLayout(name="memory"))
+    layout["disk_net"].split_row(CompatLayout(name="disk"), CompatLayout(name="network"))
 
     layout["right_column"].split_column(
-        Layout(name="sensors_gpu", ratio=1),
-        Layout(name="other", ratio=2)
+        CompatLayout(name="sensors_gpu", ratio=1),
+        CompatLayout(name="other", ratio=2)
     )
-    layout["sensors_gpu"].split_row(Layout(name="sensors"), Layout(name="gpu"))
-    layout["other"].split_row(Layout(name="cpu_info"), Layout(name="misc"))
+    layout["sensors_gpu"].split_row(CompatLayout(name="sensors"), CompatLayout(name="gpu"))
+    layout["other"].split_row(CompatLayout(name="cpu_info"), CompatLayout(name="misc"))
 
     # Populate layout with panels, passing the theme
     if "CPU Stats" in system_stats:

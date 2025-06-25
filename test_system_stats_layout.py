@@ -1,143 +1,223 @@
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, call
 from collections import OrderedDict
 
 from rich.layout import Layout
 from rich.panel import Panel
 from rich.text import Text
 from rich.theme import Theme
+from rich.bar import Bar
+from rich.tree import Tree
+from rich.table import Table
 
 # Attempt to import functions from system_stats.py
-# This might require adjusting PYTHONPATH or file structure for standalone test execution
-# For now, assume system_stats.py is in a location where it can be imported.
 try:
-    from system_stats import create_system_layout, create_panel_for_category
-except ImportError:
-    # This is a fallback if the direct import fails, e.g. when running tests in certain CI environments
-    # You might need to adjust sys.path or use relative imports if system_stats is not in the root
-    # For this exercise, we'll proceed assuming the import works or mock heavily.
-    print("Could not import from system_stats.py directly. Mocks will be heavily relied upon.")
-    create_system_layout = MagicMock()
-    create_panel_for_category = MagicMock()
+    import sys
+    import os
+    # This assumes system_stats.py is in the parent directory if tests are in a subdir,
+    # or in the same directory. Adjust as needed.
+    # If tests are in root alongside system_stats.py, this might not be needed or simpler.
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    # sys.path.insert(0, os.path.abspath(os.path.join(current_dir, '..'))) # If in subdir
+    sys.path.insert(0, current_dir) # If in same dir, or if system_stats is installable/in PYTHONPATH
 
+    import system_stats as system_stats_module
+    create_system_layout = system_stats_module.create_system_layout
+    create_panel_for_category = system_stats_module.create_panel_for_category
+    format_value = getattr(system_stats_module, 'format_value', lambda x: str(x)) # Default if not found
+except ImportError as e:
+    print(f"WARNING: Could not import from system_stats.py: {e}. Mocks will be heavily relied upon.")
+    system_stats_module = MagicMock()
+    create_system_layout = MagicMock(return_value=Layout(name="mocked_root_layout"))
+    create_panel_for_category = MagicMock(return_value=Panel(Text("Mocked Panel from create_panel_for_category")))
+    format_value = MagicMock(side_effect=lambda x: str(x))
 
 class TestSystemStatsLayout(unittest.TestCase):
 
     def setUp(self):
-        # Minimal theme for testing
         self.test_theme = Theme({
-            "panel.title": "bold white",
-            "panel.border": "dim blue",
-            "info": "dim cyan",
-            "title": "bold white on blue"
+            "info": "dim cyan", "warning": "magenta", "danger": "bold red",
+            "title": "bold white on blue", "panel.title": "bold white",
+            "panel.border": "dim blue", "table.header": "bold cyan",
+            "table.cell": "green", "bar.complete": "green",
+            "bar.finished": "dim green", "rule.line": "dim blue",
         })
 
-        # Minimal system_stats data
-        self.mock_system_stats = OrderedDict([
-            ("CPU Stats", OrderedDict([("Overall", 50.0)])),
-            # Add other categories if create_system_layout strictly requires them
-            # For this test, we mainly care about the layout structure, not content.
-        ])
+        # Patch the custom_theme in the system_stats_module.
+        # This is vital if the real create_panel_for_category is used, as it accesses this global.
+        self.theme_patcher = patch.object(system_stats_module, 'custom_theme', self.test_theme, create=True)
+        self.mock_custom_theme_from_patch = self.theme_patcher.start()
 
-        # Mock create_panel_for_category if it couldn't be imported
-        # or if we want to avoid its internal logic for this layout test.
-        if not hasattr(create_panel_for_category, '__call__'): # Check if it's the real one or MagicMock
-            self.patcher = patch('system_stats.create_panel_for_category', return_value=Panel(Text("Mock Panel")))
-            self.mock_create_panel = self.patcher.start()
-        else:
-            # If using the real one, ensure it doesn't fail with minimal data
-            # This might mean system_stats.custom_theme needs to be available to it.
-            # For simplicity in this test, let's ensure custom_theme is globally available for system_stats module
-            # This is a bit of a hack for testing.
-            if 'system_stats' in globals():
-                globals()['system_stats'].custom_theme = self.test_theme
+        # Mock data for various test scenarios
+        self.mock_system_stats_for_layout = OrderedDict([("CPU Stats", OrderedDict([("Overall", 50.0)]))])
+        self.cpu_stats_data_for_bar = OrderedDict([("Overall", 85.5)])
+        self.memory_virtual_for_bar = OrderedDict([("Total", 100000), ("Available", 50000), ("Percent", 50.0)])
+        self.disk_usage_for_bar = OrderedDict([("Total", 100000), ("Used", 75000), ("Percent", 75.0)])
+        self.disk_partitions_data = [
+            {'Device': '/dev/sda1', 'Mountpoint': '/', 'FSType': 'ext4', 'Opts': 'rw,relatime'},
+            {'Device': '/dev/sdb1', 'Mountpoint': '/data', 'FSType': 'xfs', 'Opts': 'rw,noatime'}
+        ]
+        self.network_interfaces_data = OrderedDict([
+            ('eth0', [{'Family': 'AF_INET', 'Address': '192.168.1.10', 'Netmask': '255.255.255.0', 'Broadcast': '192.168.1.255'}]),
+            ('lo', [{'Family': 'AF_INET', 'Address': '127.0.0.1', 'Netmask': '255.0.0.0', 'Broadcast': None}])
+        ])
+        self.users_data = [{'Name': 'user1', 'Terminal': 'tty1', 'Host': 'localhost', 'Started': 1678886400.0, 'PID': 1234}]
+        self.gpu_error_data = ["Error: GPU not found"]
+        self.cpu_times_data = OrderedDict([('User', 100.0), ('System', 50.0), ('Idle', 850.0)])
+        self.simple_metric_data = OrderedDict([("Boot Time", "2023-03-15 10:00:00")])
+        self.empty_list_data = []
+        self.mixed_list_data = [1, {"a": "b"}, "string", Text("Rich Text")]
 
 
     def tearDown(self):
-        if hasattr(self, 'patcher'):
-            self.patcher.stop()
-        # Clean up global hack if applied
-        if 'system_stats' in globals() and hasattr(globals()['system_stats'], 'custom_theme'):
-            del globals()['system_stats'].custom_theme
+        self.theme_patcher.stop()
 
+    def _get_renderable_from_panel(self, panel: Panel, metric_name: str):
+        if not isinstance(panel, Panel) or not hasattr(panel.renderable, 'rows'): return None
+        for row_cells in panel.renderable.rows:
+            metric_cell_renderable = row_cells[0].renderable
+            metric_text = metric_cell_renderable.plain if isinstance(metric_cell_renderable, Text) else str(metric_cell_renderable)
+            if metric_text == metric_name: return row_cells[1].renderable
+        return None
 
+    # --- Tests for create_panel_for_category ---
+    def test_cpfc_bar_cpu(self):
+        panel = create_panel_for_category("CPU Stats", self.cpu_stats_data_for_bar)
+        self.assertIsInstance(self._get_renderable_from_panel(panel, "Overall"), Bar)
+
+    def test_cpfc_bar_memory(self):
+        panel = create_panel_for_category("Memory Stats", OrderedDict([("Virtual Memory", self.memory_virtual_for_bar)]))
+        sub_table = self._get_renderable_from_panel(panel, "Virtual Memory")
+        self.assertIsInstance(sub_table, Table)
+        percent_bar = None
+        for r_cells in sub_table.rows: # r_cells is list of Cell objects
+            if r_cells[0].renderable.plain == "Percent": percent_bar = r_cells[1].renderable; break
+        self.assertIsInstance(percent_bar, Bar)
+
+    def test_cpfc_bar_disk_usage(self):
+        panel = create_panel_for_category("Disk Stats", OrderedDict([("Disk Usage", self.disk_usage_for_bar)]))
+        sub_table = self._get_renderable_from_panel(panel, "Disk Usage")
+        self.assertIsInstance(sub_table, Table)
+        percent_bar = None
+        for r_cells in sub_table.rows:
+            if r_cells[0].renderable.plain == "Percent": percent_bar = r_cells[1].renderable; break
+        self.assertIsInstance(percent_bar, Bar)
+
+    def test_cpfc_tree_disk_partitions(self):
+        panel = create_panel_for_category("Disk Stats", OrderedDict([("Disk Partitions", self.disk_partitions_data)]))
+        tree = self._get_renderable_from_panel(panel, "Disk Partitions")
+        self.assertIsInstance(tree, Tree)
+        if tree: self.assertEqual(len(tree.children), len(self.disk_partitions_data))
+
+    def test_cpfc_tree_network_interfaces(self):
+        panel = create_panel_for_category("Network Stats", OrderedDict([("Network Interfaces", self.network_interfaces_data)]))
+        tree = self._get_renderable_from_panel(panel, "Network Interfaces")
+        self.assertIsInstance(tree, Tree)
+        if tree: self.assertEqual(len(tree.children), len(self.network_interfaces_data))
+
+    def test_cpfc_list_of_dicts_table(self):
+        panel = create_panel_for_category("Other Stats", OrderedDict([("Users", self.users_data)]))
+        table = self._get_renderable_from_panel(panel, "Users")
+        self.assertIsInstance(table, Table)
+        if table: self.assertEqual(len(table.rows), len(self.users_data))
+
+    def test_cpfc_list_of_strings(self):
+        panel = create_panel_for_category("GPU Stats", OrderedDict([("GPU Details", self.gpu_error_data)]))
+        table = self._get_renderable_from_panel(panel, "GPU Details")
+        self.assertIsInstance(table, Table)
+        if table: self.assertEqual(len(table.rows), len(self.gpu_error_data)); self.assertFalse(table.show_header)
+
+    def test_cpfc_nested_dict_table(self):
+        panel = create_panel_for_category("CPU Stats", OrderedDict([("CPU Times", self.cpu_times_data)]))
+        sub_table = self._get_renderable_from_panel(panel, "CPU Times")
+        self.assertIsInstance(sub_table, Table)
+        if sub_table: self.assertEqual(len(sub_table.rows), len(self.cpu_times_data))
+
+    def test_cpfc_simple_value(self):
+        panel = create_panel_for_category("Other Stats", self.simple_metric_data)
+        value_renderable = self._get_renderable_from_panel(panel, "Boot Time")
+        self.assertIsInstance(value_renderable, Text)
+        if value_renderable: self.assertEqual(value_renderable.plain, self.simple_metric_data["Boot Time"])
+
+    def test_cpfc_empty_list(self):
+        panel = create_panel_for_category("Other Stats", OrderedDict([("EmptyData", self.empty_list_data)]))
+        table = self._get_renderable_from_panel(panel, "EmptyData")
+        self.assertIsInstance(table, Table)
+        if table: self.assertEqual(len(table.rows), 1); self.assertEqual(table.rows[0][0].renderable.plain, "No data available.")
+
+    def test_cpfc_mixed_list_content(self):
+        panel = create_panel_for_category("Mixed Content", OrderedDict([("Mixed List", self.mixed_list_data)]))
+        self.assertIsInstance(panel, Panel)
+        # This branch directly adds a Text object to the category_table for the metric's value
+        value_renderable = self._get_renderable_from_panel(panel, "Mixed List")
+        self.assertIsInstance(value_renderable, Text, "Mixed list content should be rendered as Text.")
+        if value_renderable:
+            # The actual string is truncated to 100 chars + "..."
+            # e.g., "List: [1, {'a': 'b'}, 'string', <Text str='Rich Text' style=''>][:100]..."
+            # We'll check for the "List: " prefix and the "..." suffix and the style.
+            self.assertTrue(value_renderable.plain.startswith("List: ["),
+                            f"Expected mixed list text to start with 'List: [', got '{value_renderable.plain}'")
+            self.assertTrue(value_renderable.plain.endswith("..."),
+                            f"Expected mixed list text to end with '...', got '{value_renderable.plain}'")
+            self.assertEqual(value_renderable.style, "italic warning")
+
+    # --- Test for interactive footer logic ---
     def test_interactive_footer_logic(self):
-        # 1. Get initial layout
-        # Ensure create_system_layout can access a theme if it needs it (it does for Panel titles)
-        # The global hack in setUp might handle this if system_stats is imported.
-        # If create_system_layout is mocked, this theme passing is less critical.
+        if isinstance(create_system_layout, MagicMock) and not create_system_layout.called: # Ensure mock is set if used
+            mock_layout_obj = Layout(name="root")
+            mock_layout_obj.split_column(Layout(name="header"), Layout(name="main"), Layout(name="footer", minimum_size=1))
+            mock_layout_obj["footer"].update(Panel(Text("Initial Footer")))
+            create_system_layout.return_value = mock_layout_obj
 
-        # If create_system_layout itself is a MagicMock from the import fallback
-        if isinstance(create_system_layout, MagicMock):
-            # Define a simple layout structure for the mocked version
-            mock_layout = Layout(name="root")
-            mock_layout.split_column(Layout(name="header"), Layout(name="main"), Layout(name="footer", minimum_size=1))
-            mock_layout["footer"].update(Panel(Text("Initial Footer"))) # Must be a renderable
-            create_system_layout.return_value = mock_layout
+        main_layout = create_system_layout(self.mock_system_stats_for_layout, self.test_theme)
+        insights_panel = Panel(Text("Test Insights")); gpt_prompt_panel = Panel(Text("GPT Prompt"))
+        querying_gpt_panel = Panel(Text("Querying GPT...")); gpt_response_panel = Panel(Text("GPT Response"))
+        footer_section = main_layout["footer"]; is_footer_split = False
 
-        main_layout = create_system_layout(self.mock_system_stats, self.test_theme)
-
-        # Mock panels for insights and gpt content
-        insights_panel = Panel(Text("Test Insights"), name="insights_panel")
-        gpt_prompt_panel = Panel(Text("GPT Prompt"), name="gpt_prompt_panel")
-        gpt_response_panel = Panel(Text("GPT Response"), name="gpt_response_panel")
-
-        footer_section = main_layout["footer"]
-        is_footer_split = False # Simulate the flag from system_stats.py
-
-        # Mock panels for different states
-        insights_panel = Panel(Text("Test Insights"), name="insights_panel_for_test") # Added suffix for clarity
-        gpt_prompt_panel = Panel(Text("GPT Prompt"), name="gpt_prompt_panel_for_test")
-        querying_gpt_panel = Panel(Text("Querying GPT..."), name="querying_gpt_panel_for_test")
-        gpt_response_panel = Panel(Text("GPT Response"), name="gpt_response_panel_for_test")
-
-
-        # --- Pass 1: Initial setup of prompt ---
-        self.assertFalse(is_footer_split, "is_footer_split should be False initially")
-        # Simulate the logic from system_stats.py for displaying the initial prompt
         if not is_footer_split:
-            footer_section.split_row(
-                Layout(insights_panel, name="insights_footer", ratio=1),
-                Layout(gpt_prompt_panel, name="gpt_footer", ratio=1) # gpt_footer gets the prompt panel
-            )
+            footer_section.split_row(Layout(insights_panel, name="insights_footer"), Layout(gpt_prompt_panel, name="gpt_footer"))
             is_footer_split = True
-        else:
-            self.fail("Test logic error: is_footer_split was True on first pass simulation.")
+        self.assertTrue(is_footer_split); self.assertIn("insights_footer", footer_section); self.assertIn("gpt_footer", footer_section)
 
-        self.assertTrue(is_footer_split, "is_footer_split should now be True")
-        self.assertIn("insights_footer", footer_section, "Footer should contain 'insights_footer' after split")
-        self.assertIn("gpt_footer", footer_section, "Footer should contain 'gpt_footer' after split")
-        # At this point, footer_section["gpt_footer"] contains gpt_prompt_panel
+        if is_footer_split: footer_section["gpt_footer"].update(gpt_prompt_panel) # Next prompt
+        else: self.fail("Footer not split for next prompt")
+        self.assertIn("gpt_footer", footer_section) # Check update didn't remove
 
-        # --- Pass 2: Simulating loop for next prompt (e.g., after a GPT response) ---
-        # The prompt panel would be re-asserted
-        if not is_footer_split:
-            self.fail("Test logic error: is_footer_split was False on second pass simulation for prompt.")
-        else:
-            # Footer is already split, just update the gpt_footer part with the prompt panel
-            footer_section["gpt_footer"].update(gpt_prompt_panel) # Re-set the prompt panel
+        footer_section["gpt_footer"].update(querying_gpt_panel) # Querying status
+        footer_section["gpt_footer"].update(gpt_response_panel) # Response status
+        self.assertIn("gpt_footer", footer_section) # Final check
 
-        # Check it didn't crash and gpt_footer still there
-        self.assertIn("gpt_footer", footer_section, "'gpt_footer' must exist after re-setting prompt.")
+    # --- Tests for create_system_layout ---
+    @patch.object(system_stats_module, 'create_panel_for_category')
+    def test_create_system_layout_calls_create_panel(self, mock_cpfc_func):
+        mock_cpfc_func.return_value = Panel(Text("Mocked Category Panel"))
+        stats_data = OrderedDict([
+            ("CPU Stats", {"Overall": 10}), ("Memory Stats", {}), ("Disk Stats", {}),
+            ("Network Stats", {}), ("Sensor Stats", {}), ("GPU Stats", []),
+            ("CPU Info", {}), ("Other Stats", {})
+        ])
+        create_system_layout(stats_data, self.test_theme)
+        expected_calls = [
+            call("CPU Stats", stats_data["CPU Stats"]), call("Memory Stats", stats_data["Memory Stats"]),
+            call("Disk Stats", stats_data["Disk Stats"]), call("Network Stats", stats_data["Network Stats"]),
+            call("Sensor Stats", stats_data["Sensor Stats"]), call("GPU Stats", {"GPU Details": stats_data["GPU Stats"]}),
+            call("CPU Info", stats_data["CPU Info"]), call("Other System Stats", stats_data["Other Stats"])
+        ]
+        mock_cpfc_func.assert_has_calls(expected_calls, any_order=False)
+        self.assertEqual(mock_cpfc_func.call_count, len(expected_calls))
 
-
-        # --- Simulate updating gpt_footer to "Querying GPT..." ---
-        # This happens after user input, before calling query_gpt()
-        try:
-            footer_section["gpt_footer"].update(querying_gpt_panel)
-        except KeyError:
-            self.fail("KeyError when trying to update gpt_footer to 'Querying GPT...' status.")
-        self.assertIn("gpt_footer", footer_section, "'gpt_footer' must exist after setting 'Querying' status.")
-
-
-        # --- Simulate updating gpt_footer with the actual response ---
-        # This happens after query_gpt() returns
-        try:
-            footer_section["gpt_footer"].update(gpt_response_panel)
-        except KeyError:
-            self.fail("KeyError when trying to update gpt_footer with GPT response.")
-        self.assertIn("gpt_footer", footer_section, "'gpt_footer' must exist after showing response.")
-
+    def test_create_system_layout_structure(self):
+        main_layout = create_system_layout(OrderedDict(), self.test_theme) # Minimal data
+        self.assertIsInstance(main_layout, Layout)
+        for name in ["header", "main", "footer"]: self.assertIn(name, main_layout)
+        main_sec = main_layout["main"]
+        for name in ["left_column", "right_column"]: self.assertIn(name, main_sec)
+        for name in ["cpu", "memory"]: self.assertIn(name, main_sec["left_column"]["cpu_mem"])
+        for name in ["disk", "network"]: self.assertIn(name, main_sec["left_column"]["disk_net"])
+        for name in ["sensors", "gpu"]: self.assertIn(name, main_sec["right_column"]["sensors_gpu"])
+        for name in ["cpu_info", "misc"]: self.assertIn(name, main_sec["right_column"]["other"])
+        self.assertIsInstance(main_layout["header"].renderable, Panel)
+        self.assertIsInstance(main_layout["footer"].renderable, Panel)
 
 if __name__ == '__main__':
     unittest.main()

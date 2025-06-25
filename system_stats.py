@@ -346,7 +346,11 @@ def gather_other_stats():
         })
 
     # Battery
-    battery = psutil.sensors_battery()
+    try:
+        battery = psutil.sensors_battery()
+    except Exception:
+        battery = None
+
     if battery:
         other_stats['Battery'] = {
             'Percent': battery.percent,
